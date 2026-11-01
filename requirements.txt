@@ -1,0 +1,22 @@
+# LANVault — Distributed File Storage
+# Core framework
+Django>=5.0,<6.0
+djangorestframework>=3.14,<4.0
+
+# Database
+psycopg2-binary>=2.9,<3.0
+
+# Master → node RPC
+requests>=2.31,<3.0
+
+# Environment variables
+python-dotenv>=1.0,<2.0
+
+# Testing
+pytest>=8.0,<9.0
+pytest-django>=4.5,<5.0
+
+# Code quality (per README §13)
+black>=24.0,<25.0
+isort>=5.13,<6.0
+ruff>=0.5,<1.0
