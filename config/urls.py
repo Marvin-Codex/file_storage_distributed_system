@@ -1,10 +1,10 @@
-from django.contrib import admin
-from django.urls import path, include
 from django.conf import settings
+from django.contrib import admin
+from django.urls import include, path
 
 urlpatterns = []
-if settings.ROLE == "master":
+if settings.ROLE in {"master", "controller"}:
     urlpatterns += [path("admin/", admin.site.urls)]
     urlpatterns += [path("", include("vault.urls"))]
-else:
+if settings.ROLE in {"node", "controller"}:
     urlpatterns += [path("", include("node.urls"))]

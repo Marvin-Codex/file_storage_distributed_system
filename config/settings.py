@@ -1,9 +1,11 @@
 import os
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlsplit
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 ROLE = os.environ.get("ROLE", "master")
+HA_ENABLED = os.environ.get("HA_ENABLED", "False").lower() == "true"
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 DEBUG = os.environ.get("DEBUG", "True").lower() == "true"
@@ -18,9 +20,11 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
 ]
-if ROLE == "master":
+if ROLE in {"master", "controller"}:
     INSTALLED_APPS += ["vault"]
 else:
+    INSTALLED_APPS += ["node"]
+if ROLE == "controller":
     INSTALLED_APPS += ["node"]
 
 MIDDLEWARE = [
@@ -36,13 +40,27 @@ ROOT_URLCONF = "config.urls"
 WSGI_APPLICATION = "config.wsgi.application"
 
 DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
-if ROLE == "master":
+if ROLE in {"master", "controller"}:
     db_url = os.environ.get("DATABASE_URL")
     if db_url and db_url.startswith("postgres"):
+        parsed_db_url = urlsplit(db_url)
+        query = parse_qs(parsed_db_url.query)
         DATABASES["default"] = {
             "ENGINE": "django.db.backends.postgresql",
-            "NAME": db_url.rsplit("/", 1)[-1],
+            "NAME": unquote(parsed_db_url.path.lstrip("/")),
+            "USER": unquote(parsed_db_url.username or ""),
+            "PASSWORD": unquote(parsed_db_url.password or ""),
+            "HOST": parsed_db_url.hostname or "",
+            "PORT": str(parsed_db_url.port or ""),
+            "OPTIONS": {
+                "sslmode": query.get(
+                    "sslmode",
+                    [os.environ.get("POSTGRES_SSLMODE", "prefer")],
+                )[0]
+            },
         }
+if HA_ENABLED and DATABASES["default"]["ENGINE"] != "django.db.backends.postgresql":
+    raise RuntimeError("HA_ENABLED requires DATABASE_URL to use PostgreSQL")
 
 AUTH_PASSWORD_VALIDATORS = []
 LANGUAGE_CODE = "en-us"
@@ -82,3 +100,5 @@ NODE_ADDRESS = os.environ.get("NODE_ADDRESS", "")
 NODE_DATA_DIR = os.environ.get("NODE_DATA_DIR", "./data")
 NODE_CAPACITY_BYTES = int(os.environ.get("NODE_CAPACITY_BYTES", "0"))
 MASTER_URL = os.environ.get("MASTER_URL", "")
+CONTROL_PLANE_DNS = os.environ.get("CONTROL_PLANE_DNS", "lanvault.local")
+PATRONI_SCOPE = os.environ.get("PATRONI_SCOPE", "lanvault")

@@ -1,0 +1,102 @@
+/* Compatibility aliases for the shared LANVault palette. */
+.bg-slate-950 { background-color: #020617; }
+.bg-slate-900 { background-color: #0f172a; }
+.bg-slate-800 { background-color: #1e293b; }
+.text-slate-100 { color: #f1f5f9; }
+.text-slate-300 { color: #cbd5e1; }
+.text-slate-400 { color: #94a3b8; }
+.text-slate-500 { color: #64748b; }
+.text-slate-600 { color: #475569; }
+.text-slate-950 { color: #020617; }
+.border-slate-800 { border-color: #1e293b; }
+.border-slate-700 { border-color: #334155; }
+.bg-sky-500 { background-color: #0ea5e9; }
+.text-sky-400 { color: #38bdf8; }
+.text-sky-300 { color: #7dd3fc; }
+.bg-emerald-950 { background-color: #022c22; }
+.bg-rose-950 { background-color: #4c0519; }
+
+.form-shell input[type="text"],
+.form-shell input[type="email"],
+.form-shell input[type="password"],
+.form-shell input[type="url"],
+.form-shell input[type="number"] {
+    display: block;
+    width: 100%;
+    margin-top: .5rem;
+    border: 1px solid #334155;
+    border-radius: .75rem;
+    background: rgba(2, 6, 23, .72);
+    color: #f1f5f9;
+    padding: .75rem .875rem;
+    outline: none;
+    transition: border-color .2s, box-shadow .2s, background-color .2s;
+}
+
+.form-shell input[type="text"]:hover,
+.form-shell input[type="email"]:hover,
+.form-shell input[type="password"]:hover {
+    border-color: #475569;
+    background: rgba(2, 6, 23, .9);
+}
+
+.form-shell input[type="url"]:hover,
+.form-shell input[type="number"]:hover {
+    border-color: #475569;
+    background: rgba(2, 6, 23, .9);
+}
+
+.form-shell input[type="text"]:focus,
+.form-shell input[type="email"]:focus,
+.form-shell input[type="password"]:focus,
+.form-shell input[type="url"]:focus,
+.form-shell input[type="number"]:focus {
+    border-color: #38bdf8;
+    box-shadow: 0 0 0 3px rgba(14, 165, 233, .16);
+}
+
+.form-shell input[aria-invalid="true"] {
+    border-color: #fb7185;
+    box-shadow: 0 0 0 3px rgba(244, 63, 94, .12);
+}
+
+.form-shell .has-error input {
+    border-color: #fb7185;
+    box-shadow: 0 0 0 3px rgba(244, 63, 94, .12);
+}
+
+.form-error-summary {
+    border: 1px solid rgba(244, 63, 94, .38);
+    border-radius: .75rem;
+    background: rgba(76, 5, 25, .48);
+    color: #fda4af;
+    padding: .875rem 1rem;
+}
+
+.form-field-error {
+    margin-top: .5rem;
+    color: #fda4af;
+    font-size: .875rem;
+}
+
+.form-shell .field-group {
+    border: 1px solid #1e293b;
+    border-radius: .75rem;
+    background: rgba(2, 6, 23, .34);
+    padding: 1rem;
+}
+
+.form-shell .field-group > div {
+    display: flex;
+    align-items: center;
+    gap: .625rem;
+    padding: .375rem 0;
+    color: #cbd5e1;
+}
+
+.form-shell .field-group input[type="checkbox"],
+.form-shell input[type="checkbox"] {
+    width: 1rem;
+    height: 1rem;
+    accent-color: #0ea5e9;
+}

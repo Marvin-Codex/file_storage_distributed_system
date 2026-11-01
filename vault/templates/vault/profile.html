@@ -1,0 +1,40 @@
+{% extends "vault/base.html" %}
+{% block title %}Profile · LANVault{% endblock %}
+{% block content %}
+<main class="mx-auto max-w-4xl px-6 py-10">
+    <p class="text-sm font-semibold uppercase tracking-[.2em] text-sky-400">Account</p>
+    <h1 class="mt-2 text-4xl font-bold tracking-tight">Profile and settings</h1>
+    <div class="mt-8 grid gap-6 md:grid-cols-2">
+        <section class="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+            <h2 class="text-lg font-semibold">Account details</h2>
+            <dl class="mt-5 space-y-4 text-sm">
+                <div><dt class="text-slate-500">Username</dt><dd class="mt-1 text-slate-200">{{ request.user.username }}</dd></div>
+                <div><dt class="text-slate-500">Email</dt><dd class="mt-1 text-slate-200">{{ request.user.email|default:"Not provided" }}</dd></div>
+                <div><dt class="text-slate-500">Access</dt><dd class="mt-1 text-slate-200">{% if request.user.is_staff %}Staff{% else %}Member{% endif %}</dd></div>
+            </dl>
+        </section>
+        <section class="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+            <h2 class="text-lg font-semibold">Departments</h2>
+            <div class="mt-5 flex flex-wrap gap-2">
+                {% for group in request.user.groups.all %}
+                <span class="rounded-full bg-sky-400/10 px-3 py-1.5 text-sm text-sky-300">{{ group.name }}</span>
+                {% empty %}
+                <p class="text-sm text-slate-500">No department memberships assigned.</p>
+                {% endfor %}
+            </div>
+        </section>
+    </div>
+    <section class="mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-6">
+        <div class="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+            <div><h2 class="text-lg font-semibold">Password</h2><p class="mt-1 text-sm text-slate-400">Change your LANVault sign-in password.</p></div>
+            <a href="/profile/password/" class="rounded-lg bg-sky-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-sky-400">Change password</a>
+        </div>
+        {% if request.GET.password == "changed" %}<p class="mt-4 rounded-lg border border-emerald-900/60 bg-emerald-950/40 px-4 py-3 text-sm text-emerald-300">Password updated successfully.</p>{% endif %}
+    </section>
+    <section class="mt-6 rounded-2xl border border-amber-900/60 bg-amber-950/25 p-6">
+        <h2 class="font-semibold text-amber-100">How departments work</h2>
+        <p class="mt-2 text-sm leading-6 text-amber-200/75">Staff managers create departments and assign users from the LANVault management console. You can then use that exact department name as the first part of a file path.</p>
+        <p class="mt-3 text-sm text-amber-200/75">Example: membership in <code class="text-amber-300">Computing</code> lets you work with paths such as <code class="text-amber-300">/Computing/project.pdf</code>.</p>
+    </section>
+</main>
+{% endblock %}

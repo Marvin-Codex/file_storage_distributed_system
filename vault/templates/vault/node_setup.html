@@ -1,0 +1,19 @@
+{% extends "vault/base.html" %}
+{% block title %}Node setup · LANVault{% endblock %}
+{% block content %}
+<main class="mx-auto max-w-3xl px-6 py-10">
+    <p class="text-sm font-semibold uppercase tracking-[.2em] text-emerald-400">Node registered</p>
+    <h1 class="mt-2 text-3xl font-bold">{{ node.name }} setup</h1>
+    <p class="mt-3 text-slate-400">Open two PowerShell windows on the node machine. Run one command in each. The node appears online after the heartbeat succeeds.</p>
+    <div class="mt-8 space-y-5">
+        {% for label, command in commands.items %}
+        <section class="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+            <h2 class="font-semibold">{{ label|title }} command</h2>
+            <pre class="mt-3 overflow-x-auto rounded-xl border border-slate-800 bg-slate-950 p-4 text-xs leading-6 text-sky-200"><code>{{ command }}</code></pre>
+        </section>
+        {% endfor %}
+    </div>
+    <div class="mt-6 rounded-xl border border-amber-900/60 bg-amber-950/30 p-4 text-sm text-amber-200/80"><strong class="text-amber-100">Important:</strong> replace <code>&lt;same value as the master&gt;</code> with the master’s <code>CLUSTER_SECRET</code>. Keep it private.</div>
+    <a href="{% url 'vault:management' %}" class="mt-8 inline-flex rounded-lg bg-sky-500 px-4 py-2.5 font-semibold text-slate-950">Back to management</a>
+</main>
+{% endblock %}

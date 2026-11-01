@@ -1,0 +1,56 @@
+scope: lanvault
+namespace: /service/
+name: controller-1
+
+restapi:
+  listen: 0.0.0.0:8008
+  connect_address: 192.168.1.11:8008
+
+etcd3:
+  # Include every etcd member. For five controllers, list five addresses;
+  # for seven controllers, list seven addresses.
+  hosts: 192.168.1.11:2379,192.168.1.12:2379,192.168.1.13:2379
+
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        wal_level: replica
+        hot_standby: "on"
+        wal_keep_size: 256MB
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+  users:
+    lanvault:
+      password: replace-with-a-long-password
+      options:
+        - createrole
+        - createdb
+
+postgresql:
+  listen: 0.0.0.0:5432
+  connect_address: 192.168.1.11:5432
+  data_dir: /var/lib/postgresql/lanvault
+  authentication:
+    replication:
+      username: replicator
+      password: replace-with-replication-password
+    superuser:
+      username: postgres
+      password: replace-with-postgres-password
+  pg_hba:
+    - host replication replicator 192.168.1.0/24 scram-sha-256
+    - host all all 192.168.1.0/24 scram-sha-256
+
+tags:
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false

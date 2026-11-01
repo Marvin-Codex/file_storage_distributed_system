@@ -47,9 +47,9 @@ class PermissionDeniedError(UploadError):
         super().__init__("permission_denied", detail)
 
 
-def validate_path(path: str):
-    """Validate and normalize a virtual path."""
-    if not path:
+def _validate_virtual_path(path: str, *, allow_trailing_slash: bool):
+    """Validate and normalize a virtual path, returning its department."""
+    if not isinstance(path, str) or not path:
         raise InvalidPathError("path is required")
     if not path.startswith("/"):
         raise InvalidPathError("path must start with '/'")
@@ -57,15 +57,15 @@ def validate_path(path: str):
         raise InvalidPathError("path exceeds 512 characters")
     if "\\" in path:
         raise InvalidPathError("path must not contain backslashes")
-    if "\\x00" in path:
+    if "\x00" in path:
         raise InvalidPathError("path must not contain null bytes")
     for ch in path:
-        if ord(ch) < 32 and ch not in "	":
+        if ord(ch) < 32 or ord(ch) == 127:
             raise InvalidPathError("path contains control characters")
     while "//" in path:
         path = path.replace("//", "/")
     segments = [s for s in path.split("/") if s]
-    if path.endswith("/") and path != "/":
+    if not allow_trailing_slash and path.endswith("/"):
         raise InvalidPathError("path must not end with a trailing slash")
     if not segments:
         raise InvalidPathError("path must have at least one segment")
@@ -76,8 +76,22 @@ def validate_path(path: str):
         department = Group.objects.get(name=first_segment)
     except Group.DoesNotExist:
         raise InvalidPathError(f"department '{first_segment}' does not exist")
-    normalized = "/" + "/".join(segments)
+    normalized = "/" + "/".join(segments) + ("/" if allow_trailing_slash else "")
+    if len(normalized) > 512:
+        raise InvalidPathError("path exceeds 512 characters")
     return normalized, department
+
+
+def validate_path(path: str):
+    """Validate and normalize a virtual file path."""
+    return _validate_virtual_path(path, allow_trailing_slash=False)
+
+
+def validate_prefix(prefix: str):
+    """Validate and normalize a virtual directory prefix."""
+    if not prefix:
+        raise InvalidPathError("prefix is required")
+    return _validate_virtual_path(prefix, allow_trailing_slash=True)
 
 
 def check_write_permission(user, department) -> None:
@@ -146,6 +160,14 @@ def upload_file(user, path: str, file_obj) -> dict:
     for node in nodes:
         try:
             written_size, written_sha256 = put_blob(node, blob_id, file_data)
+            if written_size != size or written_sha256 != sha256_hex:
+                logger.warning(
+                    "Node %s failed integrity validation for upload %s",
+                    node.name,
+                    blob_id,
+                )
+                delete_blob(node, blob_id)
+                continue
             successful_nodes.append(node)
             logger.info(
                 "Replicated to %s: size=%s sha256=%s",
@@ -167,13 +189,11 @@ def upload_file(user, path: str, file_obj) -> dict:
 
     # Atomic DB write (�12: transaction.atomic + select_for_update on FileEntry)
     with transaction.atomic():
-        entry = FileEntry.objects.select_for_update().filter(path=normalized_path).first()
-        if entry is None:
-            entry = FileEntry.objects.create(
-                path=normalized_path,
-                owner=user,
-                department=department,
-            )
+        entry, _ = FileEntry.objects.get_or_create(
+            path=normalized_path,
+            defaults={"owner": user, "department": department},
+        )
+        entry = FileEntry.objects.select_for_update().get(pk=entry.pk)
 
         # Version number = max + 1
         latest = entry.versions.order_by("-number").first()

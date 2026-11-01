@@ -5,6 +5,7 @@ djangorestframework>=3.14,<4.0
 
 # Database
 psycopg2-binary>=2.9,<3.0
+patroni[etcd3]>=3.0,<4.0
 
 # Master → node RPC
 requests>=2.31,<3.0

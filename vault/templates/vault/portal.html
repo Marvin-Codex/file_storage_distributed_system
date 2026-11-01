@@ -1,0 +1,112 @@
+{% extends "vault/base.html" %}
+{% block title %}Workspace · LANVault{% endblock %}
+{% block content %}
+<main class="mx-auto max-w-7xl px-6 py-10">
+    <div class="flex flex-col justify-between gap-5 md:flex-row md:items-end">
+        <div>
+            <p class="text-sm font-semibold uppercase tracking-[.2em] text-sky-400">File workspace</p>
+            <h1 class="mt-2 text-4xl font-bold tracking-tight">Your department files</h1>
+            <p class="mt-3 text-slate-400">Upload once. LANVault keeps resilient replicas across the cluster.</p>
+        </div>
+        <button id="refresh-button" class="rounded-lg border border-slate-700 px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:border-slate-500 hover:text-white">Refresh files</button>
+    </div>
+
+    <section class="mt-8 rounded-2xl border border-sky-900/60 bg-sky-950/30 p-6">
+        <div class="flex items-start gap-4">
+            <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-400/15 text-sky-300">?</div>
+            <div>
+                <h2 class="font-semibold text-sky-100">Quick tips</h2>
+                <ul class="mt-3 grid gap-2 text-sm text-sky-200/75 md:grid-cols-3">
+                    <li><strong class="text-sky-100">Departments:</strong> use the group name as the first path segment, for example <code class="text-sky-300">/Computing/notes.pdf</code>.</li>
+                    <li><strong class="text-sky-100">Versions:</strong> uploading the same path creates a new immutable version; existing versions are never overwritten.</li>
+                    <li><strong class="text-sky-100">Replication:</strong> a successful upload is copied to multiple storage nodes for fault tolerance.</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <section class="mt-8 grid gap-6 lg:grid-cols-[1fr_1.5fr]">
+        <div class="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+            <div class="mb-5">
+                <h2 class="text-lg font-semibold">Upload a file</h2>
+                <p class="mt-1 text-sm text-slate-400">Your departments: {% for name in department_names %}<span class="text-sky-300">{{ name }}</span>{% if not forloop.last %}, {% endif %}{% empty %}<span class="text-amber-300">none assigned</span>{% endfor %}</p>
+            </div>
+            <form id="upload-form" class="space-y-4">
+                <label class="block text-sm font-medium text-slate-300">Virtual path
+                    <input id="path-input" required placeholder="/Computing/notes.pdf" class="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20">
+                </label>
+                <label class="block text-sm font-medium text-slate-300">File
+                    <input id="file-input" type="file" required class="mt-2 block w-full cursor-pointer rounded-lg border border-dashed border-slate-700 bg-slate-950 p-3 text-sm text-slate-400 file:mr-3 file:rounded-md file:border-0 file:bg-sky-500 file:px-3 file:py-2 file:font-semibold file:text-slate-950">
+                </label>
+                <button class="w-full rounded-lg bg-sky-500 px-4 py-3 font-semibold text-slate-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50">Upload and replicate</button>
+            </form>
+            <div id="upload-message" class="mt-4 hidden rounded-lg px-4 py-3 text-sm"></div>
+        </div>
+
+        <div class="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <h2 class="text-lg font-semibold">Stored files</h2>
+                    <p class="mt-1 text-sm text-slate-400">Browse the latest version available to you.</p>
+                </div>
+                <span id="file-count" class="rounded-full bg-slate-800 px-3 py-1 text-xs font-medium text-slate-300">Loading…</span>
+            </div>
+            <label class="mt-5 block">
+                <span class="sr-only">Filter files</span>
+                <input id="filter-input" placeholder="Filter by path…" class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-sky-500">
+            </label>
+            <div id="file-list" class="mt-4 divide-y divide-slate-800"></div>
+            <div class="mt-5 flex items-center justify-between border-t border-slate-800 pt-4">
+                <button id="previous-page" class="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 disabled:cursor-not-allowed disabled:opacity-40">Previous</button>
+                <span id="page-label" class="text-xs text-slate-500"></span>
+                <button id="next-page" class="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 disabled:cursor-not-allowed disabled:opacity-40">Next</button>
+            </div>
+        </div>
+    </section>
+</main>
+<div id="version-modal" class="fixed inset-0 z-10 hidden items-center justify-center bg-slate-950/80 px-6">
+    <div class="w-full max-w-2xl rounded-2xl border border-slate-700 bg-slate-900 p-6">
+        <div class="flex items-center justify-between">
+            <h2 id="modal-title" class="text-lg font-semibold">Version history</h2>
+            <button id="close-modal" class="text-2xl text-slate-400 hover:text-white">&times;</button>
+        </div>
+        <div id="version-list" class="mt-5 space-y-3"></div>
+    </div>
+</div>
+<script>
+const fileList = document.getElementById("file-list");
+const message = document.getElementById("upload-message");
+let currentPage = 1;
+let totalPages = 1;
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#039;" })[char]);
+const showToast = (text, success = true) => { const toast = document.createElement("div"); toast.className = `rounded-xl border px-4 py-3 text-sm shadow-xl ${success ? "border-emerald-900/60 bg-emerald-950 text-emerald-200" : "border-rose-900/60 bg-rose-950 text-rose-200"}`; toast.textContent = text; document.getElementById("toast-container").appendChild(toast); setTimeout(() => toast.remove(), 4500); };
+const showMessage = (text, success) => { message.textContent = text; message.className = `mt-4 rounded-lg border px-4 py-3 text-sm ${success ? "border-emerald-900/60 bg-emerald-950/40 text-emerald-300" : "border-rose-900/60 bg-rose-950/40 text-rose-300"}`; };
+const loadFiles = async () => {
+    const response = await fetch(`/api/files/?page=${currentPage}&page_size=20`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || "Could not load files.");
+    totalPages = payload.pagination.pages; currentPage = payload.pagination.page;
+    document.getElementById("file-count").textContent = `${payload.pagination.total} file${payload.pagination.total === 1 ? "" : "s"}`;
+    document.getElementById("page-label").textContent = `Page ${currentPage} of ${totalPages}`;
+    document.getElementById("previous-page").disabled = !payload.pagination.has_previous;
+    document.getElementById("next-page").disabled = !payload.pagination.has_next;
+    fileList.innerHTML = payload.results.length ? payload.results.map((file) => `
+        <article class="file-row flex flex-col gap-4 py-4 sm:flex-row sm:items-center sm:justify-between" data-path="${escapeHtml(file.path).toLowerCase()}">
+            <div class="min-w-0"><p class="truncate font-medium text-slate-100">${escapeHtml(file.path)}</p><p class="mt-1 text-xs text-slate-500">Version ${file.latest_version || "—"} · ${escapeHtml(file.department)}</p></div>
+            <div class="flex shrink-0 gap-2"><a class="rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700" href="/api/files/download/?path=${encodeURIComponent(file.path)}">Download</a><button data-path="${escapeHtml(file.path)}" class="version-button rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:border-slate-500">Versions</button></div>
+        </article>`).join("") : `<div class="py-12 text-center text-sm text-slate-500">No files found in your departments.</div>`;
+};
+document.getElementById("upload-form").addEventListener("submit", async (event) => {
+    event.preventDefault(); const button = event.target.querySelector("button"); button.disabled = true;
+    const form = new FormData(); form.append("path", document.getElementById("path-input").value); form.append("file", document.getElementById("file-input").files[0]);
+    try { const response = await fetch("/api/files/upload/", { method: "POST", body: form }); const payload = await response.json(); if (!response.ok) throw new Error(payload.detail || "Upload failed."); showMessage(`Uploaded version ${payload.version} with ${payload.replicas.length} replicas.`, true); showToast("File uploaded successfully."); event.target.reset(); currentPage = 1; await loadFiles(); } catch (error) { showMessage(error.message, false); showToast(error.message, false); } finally { button.disabled = false; }
+});
+document.getElementById("refresh-button").addEventListener("click", loadFiles);
+document.getElementById("previous-page").addEventListener("click", () => { if (currentPage > 1) { currentPage -= 1; loadFiles(); } });
+document.getElementById("next-page").addEventListener("click", () => { if (currentPage < totalPages) { currentPage += 1; loadFiles(); } });
+document.getElementById("filter-input").addEventListener("input", (event) => document.querySelectorAll(".file-row").forEach((row) => row.classList.toggle("hidden", !row.dataset.path.includes(event.target.value.toLowerCase()))));
+fileList.addEventListener("click", async (event) => { if (!event.target.classList.contains("version-button")) return; const path = event.target.dataset.path; const response = await fetch(`/api/files/versions/?path=${encodeURIComponent(path)}`); const payload = await response.json(); document.getElementById("modal-title").textContent = path; document.getElementById("version-list").innerHTML = payload.versions.map((version) => `<div class="rounded-lg border border-slate-800 bg-slate-950 p-4"><div class="flex justify-between"><span class="font-medium">Version ${version.number}</span><span class="text-sm text-slate-400">${version.replica_count}/${version.replication_factor} healthy copies</span></div><p class="mt-2 break-all text-xs text-slate-500">${version.sha256}</p></div>`).join(""); document.getElementById("version-modal").classList.replace("hidden", "flex"); });
+document.getElementById("close-modal").addEventListener("click", () => document.getElementById("version-modal").classList.replace("flex", "hidden"));
+loadFiles().catch((error) => { showMessage(error.message, false); showToast(error.message, false); });
+</script>
+{% endblock %}

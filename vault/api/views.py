@@ -3,29 +3,34 @@
 import json
 import logging
 
-from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
-from django.views import View
-from django.views.decorators.csrf import csrf_exempt
-from django.utils.decorators import method_decorator
 from django.conf import settings
 from django.core import signing
+from django.core.paginator import EmptyPage, Paginator
+from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.utils import timezone
-from django.contrib.auth.middleware import AuthenticationMiddleware
+from django.utils.decorators import method_decorator
+from django.views import View
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework.permissions import IsAuthenticated
 
 from ..models import StorageNode
 from ..services.replication import (
-    upload_file,
-    download_file,
-    UploadError,
+    AllReplicasUnavailableError,
     DownloadError,
+    FileNotFoundError,
+    IntegrityFailedError,
     InvalidPathError,
     NotEnoughNodesUploadError,
-    TooLargeError,
     PermissionDeniedError,
-    FileNotFoundError,
-    AllReplicasUnavailableError,
-    IntegrityFailedError,
+    TooLargeError,
+    UploadError,
+    check_read_permission,
+    download_file,
+    upload_file,
+    validate_path,
+    validate_prefix,
 )
+from .permissions import IsDepartmentMember, permission_error
 
 logger = logging.getLogger(__name__)
 
@@ -89,11 +94,9 @@ class FileUploadView(View):
     """
 
     def post(self, request):
-        if not request.user or not request.user.is_authenticated:
-            return JsonResponse(
-                {"error": "permission_denied", "detail": "authentication required"},
-                status=401,
-            )
+        error = permission_error(request, self, (IsAuthenticated,))
+        if error:
+            return error
 
         path = request.POST.get("path", "")
         uploaded_file = request.FILES.get("file")
@@ -108,6 +111,9 @@ class FileUploadView(View):
                 {"error": "invalid_path", "detail": "file is required"},
                 status=400,
             )
+        error = permission_error(request, self, (IsDepartmentMember,))
+        if error:
+            return error
 
         try:
             result = upload_file(request.user, path, uploaded_file.file)
@@ -139,12 +145,6 @@ class FileDownloadView(View):
     """
 
     def get(self, request):
-        if not request.user or not request.user.is_authenticated:
-            return JsonResponse(
-                {"error": "permission_denied", "detail": "authentication required"},
-                status=401,
-            )
-
         path = request.GET.get("path", "")
         version_str = request.GET.get("version", "")
 
@@ -153,6 +153,9 @@ class FileDownloadView(View):
                 {"error": "invalid_path", "detail": "path is required"},
                 status=400,
             )
+        error = permission_error(request, self, (IsDepartmentMember,))
+        if error:
+            return error
 
         version_number = None
         if version_str:
@@ -201,19 +204,23 @@ class FileListView(View):
     """
 
     def get(self, request):
-        if not request.user or not request.user.is_authenticated:
-            return JsonResponse(
-                {"error": "permission_denied", "detail": "authentication required"},
-                status=401,
-            )
+        error = permission_error(request, self, (IsAuthenticated,))
+        if error:
+            return error
 
         prefix = request.GET.get("prefix", "")
-
-        if prefix and not prefix.startswith("/"):
-            return JsonResponse(
-                {"error": "invalid_path", "detail": "prefix must start with '/'"},
-                status=400,
-            )
+        normalized_prefix = ""
+        if prefix:
+            try:
+                normalized_prefix, department = validate_prefix(prefix)
+                check_read_permission(request.user, department)
+            except InvalidPathError as exc:
+                return JsonResponse({"error": exc.code, "detail": exc.detail}, status=400)
+            except PermissionDeniedError as exc:
+                return JsonResponse({"error": exc.code, "detail": exc.detail}, status=403)
+            error = permission_error(request, self, (IsDepartmentMember,))
+            if error:
+                return error
 
         from ..models import FileEntry
         if request.user.is_superuser:
@@ -223,11 +230,26 @@ class FileListView(View):
                 department__in=request.user.groups.all()
             )
 
-        if prefix:
-            entries = entries.filter(path__startswith=prefix)
+        if normalized_prefix:
+            entries = entries.filter(path__startswith=normalized_prefix)
+
+        try:
+            page_number = max(int(request.GET.get("page", "1")), 1)
+            page_size = min(max(int(request.GET.get("page_size", "20")), 1), 100)
+        except ValueError:
+            return JsonResponse(
+                {"error": "invalid_path", "detail": "page and page_size must be integers"},
+                status=400,
+            )
+
+        paginator = Paginator(entries.order_by("path"), page_size)
+        try:
+            page = paginator.page(page_number)
+        except EmptyPage:
+            page = paginator.page(paginator.num_pages or 1)
 
         results = []
-        for e in entries.order_by("path"):
+        for e in page.object_list:
             latest = e.versions.order_by("-number").first()
             results.append({
                 "path": e.path,
@@ -237,7 +259,17 @@ class FileListView(View):
                 "latest_version": latest.number if latest else None,
             })
 
-        return JsonResponse({"results": results}, status=200)
+        return JsonResponse({
+            "results": results,
+            "pagination": {
+                "page": page.number,
+                "page_size": page_size,
+                "pages": paginator.num_pages,
+                "total": paginator.count,
+                "has_next": page.has_next(),
+                "has_previous": page.has_previous(),
+            },
+        }, status=200)
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -248,35 +280,29 @@ class FileVersionsView(View):
     """
 
     def get(self, request):
-        if not request.user or not request.user.is_authenticated:
-            return JsonResponse(
-                {"error": "permission_denied", "detail": "authentication required"},
-                status=401,
-            )
-
         path = request.GET.get("path", "")
-        if not path:
-            return JsonResponse(
-                {"error": "invalid_path", "detail": "path is required"},
-                status=400,
-            )
+        try:
+            normalized_path, _ = validate_path(path)
+        except InvalidPathError as exc:
+            return JsonResponse({"error": exc.code, "detail": exc.detail}, status=400)
+        error = permission_error(request, self, (IsDepartmentMember,))
+        if error:
+            return error
 
         from ..models import FileEntry
 
         try:
-            entry = FileEntry.objects.get(path=path)
+            entry = FileEntry.objects.get(path=normalized_path)
         except FileEntry.DoesNotExist:
             return JsonResponse(
                 {"error": "not_found", "detail": f"path '{path}' not found"},
                 status=404,
             )
 
-        if not request.user.is_superuser:
-            if not request.user.groups.filter(pk=entry.department.pk).exists():
-                return JsonResponse(
-                    {"error": "permission_denied", "detail": "not in department"},
-                    status=403,
-                )
+        try:
+            check_read_permission(request.user, entry.department)
+        except PermissionDeniedError as exc:
+            return JsonResponse({"error": exc.code, "detail": exc.detail}, status=403)
 
         versions = []
         for v in entry.versions.order_by("-number"):
@@ -289,4 +315,4 @@ class FileVersionsView(View):
                 "replica_count": v.replicas.filter(node__is_alive=True).count(),
             })
 
-        return JsonResponse({"path": path, "versions": versions}, status=200)
+        return JsonResponse({"path": normalized_path, "versions": versions}, status=200)

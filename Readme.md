@@ -24,8 +24,9 @@ It is a **university Distributed Systems course project**. It must clearly demon
 | Integrity | SHA-256 stored per version, verified on download |
 | Concurrency control | `transaction.atomic()` + `select_for_update()` |
 | Consistency (simple) | Write-once, versioned files — no in-place updates |
-| Security | Django auth, groups = departments, signed tokens master→node |
+| Security | Django auth, groups = departments, signed tokens controller→node |
 | RPC | Master calls nodes over HTTP/JSON |
+| Control-plane failover | Three controller nodes, Patroni/PostgreSQL quorum, readiness-gated DNS |
 
 ### Non-goals (do NOT build unless explicitly asked)
 
@@ -45,24 +46,42 @@ It is a **university Distributed Systems course project**. It must clearly demon
         │  REST (HTTP/JSON)
         ▼
  ┌───────────────────────┐        SQL        ┌────────────┐
- │ MASTER (Django + DRF) │◄─────────────────►│ PostgreSQL │
- │ auth, paths, versions │                   └────────────┘
- │ placement, monitor    │
- └──────────┬────────────┘
-            │  RPC over HTTP/JSON (signed token)
-   ┌────────┼─────────┬─────────┐
-   ▼        ▼         ▼         ▼
- Node 1   Node 2    Node 3    Node N     (blobs on local disk + heartbeat sender)
+ ┌────────────────────────────────────────┐
+ │ controller-1 / controller-2 / -3       │
+ │ Django + local blobs + heartbeat        │
+ └───────────────┬────────────────────────┘
+                 │ PostgreSQL/Patroni
+          ┌──────┴──────┐
+          │ etcd quorum │
+          └─────────────┘
+       lanvault.local → ready primary only
 ```
 
-- **One codebase, two modes**, selected by the `ROLE` environment variable: `ROLE=master` or `ROLE=node`.
-- **Master** owns *all* metadata, users, permissions and placement decisions. It is the only component with a database.
+- **One codebase, three deployment roles**, selected by `ROLE`: `ROLE=master` (development), `ROLE=node` (storage only), or `ROLE=controller` (HA-capable control plane plus local storage).
+- In HA mode, every controller runs the Django application and local blob service. PostgreSQL metadata is replicated and elected by Patroni; only the PostgreSQL primary is published through the stable DNS name.
 - **Storage nodes** are deliberately dumb: they store and serve opaque blobs by ID and send heartbeats. They know nothing about users, paths or versions.
 - Transport between master and nodes is plain HTTP + JSON/binary bodies. No gRPC, no message broker.
 
+### HA behavior
+
+With `HA_ENABLED=True`, an odd-sized set of `ROLE=controller` machines forms
+the control plane. Three controllers are the recommended minimum; five or
+seven can be used when more failure tolerance is needed. Patroni uses the
+matching etcd quorum to elect the PostgreSQL primary and promotes the most
+up-to-date healthy replica. Each Django instance serves
+`/ready/`; it returns `200` only when connected to the PostgreSQL primary and
+`503` while the local database is a replica. DNS health automation publishes
+only the ready controller at the stable `CONTROL_PLANE_DNS` name.
+
+This separates responsibilities safely: Patroni elects the database leader,
+PostgreSQL replicates users and file metadata, and DNS routes application
+traffic. Do not use round-robin DNS without health checks.
+
 ### Known weaknesses (documented, accepted for now)
 
-1. **Single master** = single point of failure. Future fix: standby master + PostgreSQL replication.
+1. **DNS automation is deployment-specific**. The project exposes `/ready/`,
+   but an operator must connect it to the chosen DNS provider or health-aware
+   DNS service.
 2. **Files pass through the master** = bottleneck. Future fix: client uploads directly to nodes using a short-lived signed token issued by the master.
 3. Celery/Redis are **not** required. A looping management command is the monitor.
 
@@ -71,10 +90,11 @@ It is a **university Distributed Systems course project**. It must clearly demon
 ## 3. Tech stack
 
 - Python 3.12+, Django 5.x, Django REST Framework
-- PostgreSQL (master only). SQLite is acceptable for the very first local spike, but `select_for_update()` is a no-op on SQLite — test concurrency on PostgreSQL.
+- PostgreSQL for controller metadata. SQLite is development-only; HA mode rejects it because `select_for_update()` is a no-op and metadata cannot be replicated.
 - `requests` for master→node calls
 - `django.core.signing` (or `itsdangerous`) for signed inter-service tokens
 - Django admin + simple templates for the cluster dashboard
+- Patroni + etcd for PostgreSQL leader election in HA mode
 - `pytest` + `pytest-django` for tests
 
 No other frameworks without asking.
@@ -225,6 +245,20 @@ All master endpoints are under `/api/` and require authentication (session or to
 
 ### 7.1 Master → client
 
+Departments, users, and node onboarding are managed through the protected
+LANVault console at `/manage/`. Staff can create, edit, and delete
+departments; create and edit users; assign department memberships; update
+passwords; and register storage nodes. The **Add node** wizard generates the
+two PowerShell commands needed on the node machine: one to run the node
+server and one to send heartbeats. A superuser may also grant or revoke staff
+access. Users cannot manage themselves, delete their own account, or access
+this console unless they are staff. Deleting a department or user that owns
+stored files is blocked so storage references are not broken.
+
+The group name is case-sensitive and must be the first segment of file paths,
+for example a `Computing` department permits `/Computing/notes.pdf`. Django
+admin is not required for normal user or department administration.
+
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/api/files/upload/` | Multipart: `path`, `file`. Creates entry (if new) and version N+1. |
@@ -232,6 +266,8 @@ All master endpoints are under `/api/` and require authentication (session or to
 | `GET` | `/api/files/?prefix=/Computing/` | Lists entries the user may see. |
 | `GET` | `/api/files/versions/?path=...` | Lists versions of a path. |
 | `GET` | `/api/cluster/status/` | Nodes, health, free space (staff only). |
+
+The staff-only HTML cluster dashboard is available at `/dashboard/`.
 
 Upload response (`201`):
 
@@ -330,7 +366,10 @@ Guard against running two monitors at once (PostgreSQL advisory lock). Use `sele
 - **Write:** user must be in the group matching the first path segment (or be superuser).
 - **Read:** same group, or superuser. (Extend later with shared folders — do not add now.)
 - Staff-only: `/api/cluster/status/` and the dashboard.
-- Enforce permissions in `vault/api/permissions.py` as DRF permission classes, not inline in views.
+- Enforce permissions with the DRF permission classes in `vault/api/permissions.py`.
+  The master API views apply `IsAuthenticated` and `IsDepartmentMember`, while
+  the cluster status API and dashboard apply `IsStaff`. `permission_error`
+  preserves the documented JSON error shape for rejected API requests.
 
 ---
 
@@ -393,7 +432,7 @@ Work in this order; each milestone must run end-to-end before starting the next.
 7. **M7 — Permissions + path validation + error shape.**
 8. **M8 — Dashboard:** nodes, free space, files and their replica placement, under-replicated warnings.
 9. **M9 — Hardening:** concurrency test, timeouts, logging, docs, demo script.
-10. **Stretch:** direct-to-node upload with signed token; standby master; orphan blob cleanup; client-side cache; CLI client.
+10. **Stretch:** direct-to-node upload with signed token; orphan blob cleanup; client-side cache; CLI client.
 
 ---
 
@@ -405,28 +444,37 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env            # then fill in values
 
-# 1) master (terminal 1)
-ROLE=master python manage.py migrate
-ROLE=master python manage.py createsuperuser
-ROLE=master python manage.py runserver 8000
+# 1) controllers (one process per machine; three is the recommended minimum)
+ROLE=controller HA_ENABLED=True DATABASE_URL=postgres://... python manage.py migrate
+ROLE=controller HA_ENABLED=True DATABASE_URL=postgres://... python manage.py createsuperuser
+ROLE=controller HA_ENABLED=True DATABASE_URL=postgres://... python manage.py runserver 8000
 
 # 2) monitor (terminal 2)
-ROLE=master python manage.py monitor
+ROLE=controller HA_ENABLED=True DATABASE_URL=postgres://... python manage.py monitor
 # For a single detection/repair pass (useful for tests):
-ROLE=master python manage.py monitor --once
+ROLE=controller HA_ENABLED=True DATABASE_URL=postgres://... python manage.py monitor --once
 
-# 3) nodes (terminals 3-5)
-ROLE=node NODE_NAME=node1 NODE_ADDRESS=http://127.0.0.1:9001 NODE_DATA_DIR=./data/node1 python manage.py runserver 9001
-ROLE=node NODE_NAME=node2 NODE_ADDRESS=http://127.0.0.1:9002 NODE_DATA_DIR=./data/node2 python manage.py runserver 9002
-ROLE=node NODE_NAME=node3 NODE_ADDRESS=http://127.0.0.1:9003 NODE_DATA_DIR=./data/node3 python manage.py runserver 9003
-# plus the heartbeat sender for each node: python manage.py run_heartbeat
+# 3) each controller also runs its local node server and heartbeat sender
+ROLE=controller NODE_NAME=node1 NODE_ADDRESS=http://127.0.0.1:9001 NODE_DATA_DIR=./data/node1 MASTER_URL=http://lanvault.local:8000 python manage.py runserver 9001
+# plus the heartbeat sender for each controller: python manage.py run_heartbeat
 ```
 
 On a real LAN, run the master on one machine and each node on its own machine, set `NODE_ADDRESS` to the machine's LAN IP, and open the ports in the firewall.
 
+For controller-cluster automatic failover, follow
+[`deploy/patroni/README.md`](deploy/patroni/README.md), set `ROLE=controller`
+and `HA_ENABLED=True` on every controller, and publish only the controller
+whose `/ready/` endpoint returns HTTP 200 at `CONTROL_PLANE_DNS`.
+
 ---
 
 ## 16. Demo script (must always work)
+
+The Windows walkthrough is in [`scripts/demo.md`](scripts/demo.md).
+
+For production UI assets, install Node.js and run `npm install` followed by
+`npm run build:css`. This generates the local Tailwind bundle used by the
+templates; the application does not load Tailwind from a CDN.
 
 1. Start the master, monitor and 3 nodes. Dashboard shows 3 alive nodes.
 2. Upload `/Computing/notes.pdf` → response lists 2 replicas; dashboard shows where.

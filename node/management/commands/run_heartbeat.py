@@ -1,18 +1,12 @@
-"""Heartbeat sender — periodically reports this node to the master.
+"""Heartbeat sender for storage nodes."""
 
-Usage (as a node):
-    ROLE=node NODE_NAME=node1 NODE_ADDRESS=http://127.0.0.1:9001 \\
-        NODE_DATA_DIR=./data/node1 MASTER_URL=http://127.0.0.1:8000 \\
-        python manage.py run_heartbeat
-"""
-
-import json
 import logging
 import os
 import time
 
 import requests
 from django.conf import settings
+from django.core import signing
 from django.core.management.base import BaseCommand
 
 logger = logging.getLogger(__name__)
@@ -46,8 +40,12 @@ class Command(BaseCommand):
 
         while True:
             try:
-                self._send_heartbeat(node_name, node_address, data_dir, capacity, master_url)
-            except Exception:  # never let one failed heartbeat crash the loop (§12)
+                self._send_heartbeat(
+                    node_name, node_address, data_dir, capacity, master_url
+                )
+            except requests.RequestException:
+                logger.exception("Heartbeat request failed for node %s", node_name)
+            except (OSError, ValueError):
                 logger.exception("Heartbeat loop error")
             time.sleep(interval)
 
@@ -60,19 +58,14 @@ class Command(BaseCommand):
             "capacity_bytes": capacity,
             "used_bytes": used_bytes,
         }
-
-        # Sign with node token (role="node", max age 60s) (§11)
-        from django.core import signing
         token = signing.dumps({"role": "node", "name": name}, key=settings.CLUSTER_SECRET)
-
-        url = f"{master_url}/internal/heartbeat/"
-        resp = requests.post(
-            url,
+        response = requests.post(
+            f"{master_url}/internal/heartbeat/",
             json=payload,
             headers={"Authorization": f"Bearer {token}"},
-            timeout=10,  # §12: every network call has a timeout
+            timeout=(5, 30),
         )
-        resp.raise_for_status()
+        response.raise_for_status()
         logger.debug("Heartbeat acknowledged by master: %s", name)
 
     @staticmethod

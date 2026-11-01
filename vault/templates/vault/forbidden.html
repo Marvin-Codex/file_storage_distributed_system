@@ -1,0 +1,10 @@
+{% extends "vault/base.html" %}
+{% block title %}Access denied · LANVault{% endblock %}
+{% block content %}
+<main class="mx-auto max-w-2xl px-6 py-20 text-center">
+    <p class="text-sm font-semibold uppercase tracking-[.2em] text-rose-400">403</p>
+    <h1 class="mt-3 text-3xl font-bold">Access denied</h1>
+    <p class="mt-3 text-slate-400">You do not have permission to use this management area.</p>
+    <a href="/files/" class="mt-8 inline-flex rounded-lg bg-sky-500 px-4 py-2.5 font-semibold text-slate-950">Return to workspace</a>
+</main>
+{% endblock %}
