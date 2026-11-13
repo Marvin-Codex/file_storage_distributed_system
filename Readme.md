@@ -167,6 +167,10 @@ lanvault/
 
 Never hard-code these. Read them in `settings.py` and fail fast if a required one is missing for the active `ROLE`.
 
+The `.env` file is loaded from the repository root. Restart long-running Django
+commands such as `run_heartbeat` after changing it; already-exported shell
+variables take precedence over values in `.env`.
+
 ---
 
 ## 6. Data model (master)

@@ -1,11 +1,15 @@
 import os
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
+from dotenv import load_dotenv
 
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
+
+load_dotenv(BASE_DIR / ".env")
+
 
 ROLE = os.environ.get("ROLE", "master")
 HA_ENABLED = os.environ.get("HA_ENABLED", "False").lower() == "true"
