@@ -1,0 +1,465 @@
+# LANVault — Distributed File Storage for a Local Network
+
+> Context file for AI coding assistants. Read this fully before writing or changing any code in this repo. It is the source of truth for scope, architecture, naming and conventions.
+
+---
+
+## 1. What this project is
+
+LANVault is a **distributed file storage system for a local network** (e.g. a university department LAN). Users upload and download files by **virtual path** (`/Computing/notes.pdf`). The system stores each file on **several machines (storage nodes)**, so files survive a machine failure, and users never need to know which machine holds a file.
+
+It is a **university Distributed Systems course project**. It must clearly demonstrate real distributed-systems concepts, not just a CRUD app with folders.
+
+**Team:** SSERUNJOJI MARVIN (23/2/370/W/203), MUKIIBI JUMAH (23/2/370/W/537), SHARAFUDIN LUTALO (23/2/370/W/592) — Ndejje University.
+
+### Concepts the project must demonstrate
+
+| Concept | Where it lives |
+|---|---|
+| Replication | `Replica` model, replication factor 2–3 |
+| Failure detection | Heartbeats + `monitor` management command |
+| Self-healing / re-replication | `monitor` restores missing copies |
+| Fault-tolerant reads (failover) | Download tries replicas in order |
+| Location transparency | Users see `FileEntry.path`, never node addresses |
+| Integrity | SHA-256 stored per version, verified on download |
+| Concurrency control | `transaction.atomic()` + `select_for_update()` |
+| Consistency (simple) | Write-once, versioned files — no in-place updates |
+| Security | Django auth, groups = departments, signed tokens master→node |
+| RPC | Master calls nodes over HTTP/JSON |
+
+### Non-goals (do NOT build unless explicitly asked)
+
+- Block-level chunking or striping of large files
+- Erasure coding
+- Consensus protocols (Raft/Paxos) or automatic master election
+- Client-side encryption
+- Cloud deployment, Kubernetes, Docker-orchestrated autoscaling
+- A fancy SPA frontend (server-rendered Django templates / admin is enough)
+
+---
+
+## 2. Architecture
+
+```
+ Browser / CLI client
+        │  REST (HTTP/JSON)
+        ▼
+ ┌───────────────────────┐        SQL        ┌────────────┐
+ │ MASTER (Django + DRF) │◄─────────────────►│ PostgreSQL │
+ │ auth, paths, versions │                   └────────────┘
+ │ placement, monitor    │
+ └──────────┬────────────┘
+            │  RPC over HTTP/JSON (signed token)
+   ┌────────┼─────────┬─────────┐
+   ▼        ▼         ▼         ▼
+ Node 1   Node 2    Node 3    Node N     (blobs on local disk + heartbeat sender)
+```
+
+- **One codebase, two modes**, selected by the `ROLE` environment variable: `ROLE=master` or `ROLE=node`.
+- **Master** owns *all* metadata, users, permissions and placement decisions. It is the only component with a database.
+- **Storage nodes** are deliberately dumb: they store and serve opaque blobs by ID and send heartbeats. They know nothing about users, paths or versions.
+- Transport between master and nodes is plain HTTP + JSON/binary bodies. No gRPC, no message broker.
+
+### Known weaknesses (documented, accepted for now)
+
+1. **Single master** = single point of failure. Future fix: standby master + PostgreSQL replication.
+2. **Files pass through the master** = bottleneck. Future fix: client uploads directly to nodes using a short-lived signed token issued by the master.
+3. Celery/Redis are **not** required. A looping management command is the monitor.
+
+---
+
+## 3. Tech stack
+
+- Python 3.12+, Django 5.x, Django REST Framework
+- PostgreSQL (master only). SQLite is acceptable for the very first local spike, but `select_for_update()` is a no-op on SQLite — test concurrency on PostgreSQL.
+- `requests` for master→node calls
+- `django.core.signing` (or `itsdangerous`) for signed inter-service tokens
+- Django admin + simple templates for the cluster dashboard
+- `pytest` + `pytest-django` for tests
+
+No other frameworks without asking.
+
+---
+
+## 4. Repository layout
+
+```
+lanvault/
+├── manage.py
+├── README.md
+├── requirements.txt
+├── .env.example
+├── config/
+│   ├── settings.py          # reads ROLE and env vars
+│   ├── urls.py              # includes master or node URLs based on ROLE
+│   └── wsgi.py
+├── vault/                   # the master app
+│   ├── models.py            # StorageNode, FileEntry, FileVersion, Replica
+│   ├── api/
+│   │   ├── serializers.py
+│   │   ├── views.py         # upload, download, list, heartbeat
+│   │   ├── urls.py
+│   │   └── permissions.py   # department/group checks
+│   ├── services/
+│   │   ├── placement.py     # choose nodes for a new version
+│   │   ├── node_client.py   # master -> node RPC (put/get/delete)
+│   │   ├── replication.py   # upload orchestration + re-replication
+│   │   └── tokens.py        # sign/verify inter-service tokens
+│   ├── management/commands/
+│   │   └── monitor.py       # failure detection + self-healing loop
+│   ├── admin.py             # cluster dashboard
+│   ├── templates/vault/
+│   └── tests/
+├── node/                    # the storage-node app
+│   ├── views.py             # PUT/GET/DELETE /store/<id>
+│   ├── urls.py
+│   ├── storage.py           # safe disk read/write
+│   ├── heartbeat.py         # background sender
+│   └── management/commands/run_heartbeat.py
+└── scripts/
+    ├── run_master.sh
+    ├── run_node.sh
+    └── demo.md              # the 5-step demo script
+```
+
+`config/urls.py` must include **only** the apps relevant to `ROLE`, so a node never exposes master endpoints and vice versa.
+
+---
+
+## 5. Configuration (environment variables)
+
+| Variable | Used by | Example | Meaning |
+|---|---|---|---|
+| `ROLE` | both | `master` / `node` | Selects mode |
+| `SECRET_KEY` | both | — | Django secret |
+| `CLUSTER_SECRET` | both | long random string | Signs master↔node tokens. **Same on all machines.** |
+| `DATABASE_URL` | master | `postgres://...` | Metadata DB |
+| `NODE_NAME` | node | `node1` | Unique node name |
+| `NODE_ADDRESS` | node | `http://192.168.1.21:9001` | URL the master uses to reach this node |
+| `NODE_DATA_DIR` | node | `/var/lanvault/data` | Blob directory |
+| `NODE_CAPACITY_BYTES` | node | `107374182400` | Reported in heartbeats |
+| `MASTER_URL` | node | `http://192.168.1.10:8000` | Where to send heartbeats |
+| `REPLICATION_FACTOR` | master | `2` | Default copies per version |
+| `HEARTBEAT_INTERVAL_SECONDS` | node | `5` | Heartbeat period |
+| `NODE_DEAD_AFTER_SECONDS` | master | `15` | Silence before a node is marked dead |
+| `MONITOR_INTERVAL_SECONDS` | master | `5` | Monitor loop period |
+| `MAX_UPLOAD_BYTES` | master | `104857600` | Reject larger uploads |
+
+Never hard-code these. Read them in `settings.py` and fail fast if a required one is missing for the active `ROLE`.
+
+---
+
+## 6. Data model (master)
+
+```python
+# vault/models.py
+import uuid
+from django.conf import settings
+from django.contrib.auth.models import Group
+from django.db import models
+from django.utils import timezone
+
+
+class StorageNode(models.Model):
+    name = models.CharField(max_length=64, unique=True)
+    address = models.URLField(unique=True)            # e.g. http://192.168.1.21:9001
+    last_heartbeat = models.DateTimeField(null=True, blank=True)
+    is_alive = models.BooleanField(default=False)
+    capacity_bytes = models.BigIntegerField(default=0)
+    used_bytes = models.BigIntegerField(default=0)
+
+    @property
+    def free_bytes(self):
+        return max(self.capacity_bytes - self.used_bytes, 0)
+
+    def __str__(self):
+        return self.name
+
+
+class FileEntry(models.Model):
+    """The virtual path users see. One entry, many versions."""
+    path = models.CharField(max_length=512, unique=True)   # '/Computing/notes.pdf'
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    department = models.ForeignKey(Group, on_delete=models.PROTECT)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    def latest_version(self):
+        return self.versions.order_by("-number").first()
+
+
+class FileVersion(models.Model):
+    """Write-once. Never modified after creation."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # also the blob ID on nodes
+    entry = models.ForeignKey(FileEntry, related_name="versions", on_delete=models.CASCADE)
+    number = models.PositiveIntegerField()
+    size = models.BigIntegerField()
+    sha256 = models.CharField(max_length=64)
+    replication_factor = models.PositiveSmallIntegerField()
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        unique_together = [("entry", "number")]
+
+
+class Replica(models.Model):
+    version = models.ForeignKey(FileVersion, related_name="replicas", on_delete=models.CASCADE)
+    node = models.ForeignKey(StorageNode, related_name="replicas", on_delete=models.CASCADE)
+    verified_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = [("version", "node")]
+```
+
+Rules:
+
+- **Versions are immutable.** An "update" creates version N+1. Never edit `size`, `sha256` or blobs of an existing version.
+- The blob ID on a node is `FileVersion.id` (a UUID). Nodes never see paths.
+- **Alive replica** = a `Replica` whose `node.is_alive` is true.
+- **Healthy version** = `alive replica count >= version.replication_factor`.
+
+---
+
+## 7. APIs
+
+All master endpoints are under `/api/` and require authentication (session or token) unless stated.
+
+### 7.1 Master → client
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/files/upload/` | Multipart: `path`, `file`. Creates entry (if new) and version N+1. |
+| `GET` | `/api/files/download/?path=/Computing/notes.pdf` | Streams the latest version. Optional `&version=N`. |
+| `GET` | `/api/files/?prefix=/Computing/` | Lists entries the user may see. |
+| `GET` | `/api/files/versions/?path=...` | Lists versions of a path. |
+| `GET` | `/api/cluster/status/` | Nodes, health, free space (staff only). |
+
+Upload response (`201`):
+
+```json
+{ "path": "/Computing/notes.pdf", "version": 1, "size": 48213,
+  "sha256": "…", "replicas": ["node1", "node2"] }
+```
+
+Error shape (always this):
+
+```json
+{ "error": "not_enough_nodes", "detail": "Need 2 alive nodes, found 1." }
+```
+
+Error codes to use: `permission_denied`, `not_found`, `not_enough_nodes`, `too_large`, `integrity_failed`, `all_replicas_unavailable`, `invalid_path`.
+
+### 7.2 Node → master (heartbeat)
+
+`POST /internal/heartbeat/` — authenticated by signed token, **not** user auth.
+
+```json
+{ "name": "node1", "address": "http://192.168.1.21:9001",
+  "capacity_bytes": 107374182400, "used_bytes": 5242880 }
+```
+
+Master does `update_or_create` on `StorageNode` by `name`, sets `last_heartbeat=now`, `is_alive=True`.
+
+### 7.3 Master → node (RPC)
+
+Every request carries `Authorization: Bearer <signed token>`; the node rejects anything invalid or older than 60 s.
+
+| Method | Path | Behaviour |
+|---|---|---|
+| `PUT` | `/store/<uuid>` | Write body to disk. Write to a temp file, `fsync`, then atomic `os.replace`. Return `201` + `{ "size": n, "sha256": "…" }`. Idempotent. |
+| `GET` | `/store/<uuid>` | Stream blob. `404` if missing. |
+| `DELETE` | `/store/<uuid>` | Remove blob. `204`, also `204` if already gone. |
+| `GET` | `/health` | `200` + free space. |
+
+Nodes must **validate the UUID format** and build the file path only from it, inside `NODE_DATA_DIR` (no path traversal, ever).
+
+---
+
+## 8. Core flows (implement exactly like this)
+
+### 8.1 Upload
+
+1. Authenticate; check the user is in the target department group (§9).
+2. Validate `path` (see §10) and size ≤ `MAX_UPLOAD_BYTES`.
+3. Stream the file once to compute **SHA-256** and size (spool to a temp file).
+4. Choose `k = REPLICATION_FACTOR` alive nodes with enough free space, **most free space first** (`services/placement.py`). If fewer than `k` → `not_enough_nodes`.
+5. `PUT /store/<version_id>` to each chosen node. Collect the successes.
+   - If fewer than `k` succeed, try other alive nodes. If still short: delete any partial blobs, return `not_enough_nodes`. **Do not create DB rows.**
+6. In **one** `transaction.atomic()`:
+   - `FileEntry` get-or-create with `select_for_update()` on the entry row so concurrent uploads to the same path get distinct version numbers.
+   - Create `FileVersion` (`number = last + 1`).
+   - Create a `Replica` per successful node (`verified_at = now`).
+7. Return `201`.
+
+DB rows are written **after** blobs exist, so the metadata never points at data that was never stored. Orphaned blobs from a crash between steps 5 and 6 are acceptable (cleanup is a stretch goal).
+
+### 8.2 Download
+
+1. Authenticate + permission check.
+2. Resolve latest (or requested) `FileVersion`.
+3. List replicas whose node `is_alive`, in a stable order.
+4. For each: `GET` the blob from the node, **stream into a temp buffer while hashing**.
+   - Node unreachable, timeout (use 5 s connect / 30 s read), non-200, or SHA-256 mismatch → log, try the next replica.
+5. First verified result is returned to the client.
+6. All fail → `503 all_replicas_unavailable`.
+
+Never send bytes to the client before the checksum is verified (or the client may receive a corrupt file). For large files, spool to a temp file, verify, then stream.
+
+### 8.3 Heartbeat
+
+Node sends a heartbeat every `HEARTBEAT_INTERVAL_SECONDS` (default 5 s). The master only records it — no other logic in the request path.
+
+### 8.4 Monitor (failure detection + self-healing)
+
+`python manage.py monitor` runs forever, every `MONITOR_INTERVAL_SECONDS`:
+
+1. **Detect:** nodes with `last_heartbeat < now - NODE_DEAD_AFTER_SECONDS` → `is_alive=False`. A node that heartbeats again → `is_alive=True` (handled in the heartbeat view).
+2. **Find under-replicated versions:** alive replica count < `replication_factor`.
+3. **Repair:** for each, pick a surviving alive replica as the source, pick an alive node that does not already hold it, `GET` from the source, verify SHA-256, `PUT` to the target, create the `Replica` row.
+4. **Recovered node coming back:** it may hold blobs for versions that are already healthy. Leave them (extra copies are harmless); optionally prune over-replicated versions as a stretch goal.
+5. Log every state change (`node X marked dead`, `repaired version V -> node Y`).
+
+Guard against running two monitors at once (PostgreSQL advisory lock). Use `select_for_update(skip_locked=True)` when repairing so repairs never double-apply.
+
+---
+
+## 9. Permissions
+
+- Each **department is a Django `Group`**.
+- `FileEntry.department` decides who can write/read.
+- Path convention: the first path segment is the department name: `/Computing/...` → group `Computing`.
+- **Write:** user must be in the group matching the first path segment (or be superuser).
+- **Read:** same group, or superuser. (Extend later with shared folders — do not add now.)
+- Staff-only: `/api/cluster/status/` and the dashboard.
+- Enforce permissions in `vault/api/permissions.py` as DRF permission classes, not inline in views.
+
+---
+
+## 10. Path rules
+
+Normalise and validate every path before use:
+
+- Must start with `/`; first segment must be an existing department group.
+- No `..`, no empty segments, no `\`, no control characters, no null bytes.
+- Max length 512; collapse duplicate slashes; no trailing slash for files.
+- Case-sensitive, stored exactly as normalised.
+
+Return `invalid_path` otherwise. Paths are **virtual only**; they never touch the filesystem on master or nodes.
+
+---
+
+## 11. Security rules
+
+- Inter-service tokens: `TimestampSigner`/`signing.dumps` with `CLUSTER_SECRET`, include `{"role": "master"|"node", "name": ...}`, max age 60 s, constant-time comparison.
+- Node endpoints reject any request without a valid token (`401`).
+- Never log tokens, secrets, or file contents.
+- Never trust the client-supplied filename or content type.
+- Set `DEBUG=False` outside local dev; `ALLOWED_HOSTS` from env.
+- Do not store files in the master's `MEDIA_ROOT` — master holds metadata only (spool files are temporary and deleted).
+
+---
+
+## 12. Concurrency rules
+
+- Version-number allocation and replica creation happen inside `transaction.atomic()` with `select_for_update()` on the `FileEntry`.
+- Heartbeats use `update_or_create` — never read-modify-write counters in Python.
+- Node writes use temp-file + atomic rename so a reader never sees a half-written blob.
+- Treat **every** network call as able to fail: set timeouts, catch `requests.RequestException`, never let one bad node crash a request or the monitor loop.
+
+---
+
+## 13. Coding conventions
+
+- Type hints on all new functions. Small, single-purpose functions; business logic in `services/`, not in views.
+- Views are thin: validate → call service → serialise.
+- No bare `except:`. Catch specific exceptions; log with context (`logger.exception`).
+- Use `logging`, not `print`.
+- Migrations are committed. Never edit an applied migration; create a new one.
+- Tests with `pytest-django`. For node calls, mock `node_client`; add at least one real integration test running two node apps.
+- Format with `black` + `isort`; lint with `ruff`.
+- Keep functions deterministic where possible (inject `now`/random choice for testability).
+
+---
+
+## 14. Build order (milestones)
+
+Work in this order; each milestone must run end-to-end before starting the next.
+
+1. **M1 — Skeleton:** project, `ROLE` switching, settings, PostgreSQL, models + migrations, admin registered.
+2. **M2 — Node app:** `PUT/GET/DELETE /store/<uuid>`, signed-token auth, safe disk storage, `/health`.
+3. **M3 — Heartbeats:** node sender + master endpoint, node shows alive/dead in admin.
+4. **M4 — Upload:** placement, node client, replication to `k` nodes, atomic DB write.
+5. **M5 — Download:** replica selection, checksum verification, failover.
+6. **M6 — Monitor:** failure detection, then self-healing re-replication.
+7. **M7 — Permissions + path validation + error shape.**
+8. **M8 — Dashboard:** nodes, free space, files and their replica placement, under-replicated warnings.
+9. **M9 — Hardening:** concurrency test, timeouts, logging, docs, demo script.
+10. **Stretch:** direct-to-node upload with signed token; standby master; orphan blob cleanup; client-side cache; CLI client.
+
+---
+
+## 15. Running locally (3 nodes on one machine)
+
+```bash
+# 0) setup
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env            # then fill in values
+
+# 1) master (terminal 1)
+ROLE=master python manage.py migrate
+ROLE=master python manage.py createsuperuser
+ROLE=master python manage.py runserver 8000
+
+# 2) monitor (terminal 2)
+ROLE=master python manage.py monitor
+
+# 3) nodes (terminals 3-5)
+ROLE=node NODE_NAME=node1 NODE_ADDRESS=http://127.0.0.1:9001 NODE_DATA_DIR=./data/node1 python manage.py runserver 9001
+ROLE=node NODE_NAME=node2 NODE_ADDRESS=http://127.0.0.1:9002 NODE_DATA_DIR=./data/node2 python manage.py runserver 9002
+ROLE=node NODE_NAME=node3 NODE_ADDRESS=http://127.0.0.1:9003 NODE_DATA_DIR=./data/node3 python manage.py runserver 9003
+# plus the heartbeat sender for each node: python manage.py run_heartbeat
+```
+
+On a real LAN, run the master on one machine and each node on its own machine, set `NODE_ADDRESS` to the machine's LAN IP, and open the ports in the firewall.
+
+---
+
+## 16. Demo script (must always work)
+
+1. Start the master, monitor and 3 nodes. Dashboard shows 3 alive nodes.
+2. Upload `/Computing/notes.pdf` → response lists 2 replicas; dashboard shows where.
+3. **Kill** one node that holds a replica (`Ctrl+C`).
+4. Download `/Computing/notes.pdf` → still works (failover), checksum verified.
+5. Wait ~`NODE_DEAD_AFTER_SECONDS` + one monitor cycle → node marked dead, a **new replica** appears on the third node, dashboard returns to "2 of 2 copies".
+
+If a change breaks this demo, it is a bug.
+
+---
+
+## 17. Testing checklist
+
+- Upload with 1 alive node and factor 2 → `not_enough_nodes`, no DB rows, no leftover blobs.
+- Upload when one node fails mid-way → falls back to another node.
+- Two simultaneous uploads to the same path → versions 1 and 2, no integrity error.
+- Download with first replica down → served from second.
+- Download with first replica corrupted (flip a byte on disk) → checksum mismatch, served from second.
+- All replicas down → `503 all_replicas_unavailable`.
+- Node marked dead after silence; revived on next heartbeat.
+- Monitor repairs an under-replicated version and is idempotent on a second run.
+- Path traversal attempts (`../`, `%2e%2e`, absolute node paths) rejected on master and node.
+- Unauthorised user cannot read/write another department.
+- Requests to node endpoints without a valid token → `401`.
+
+---
+
+## 18. Instructions for the AI assistant
+
+- **Follow this README.** If a request contradicts it, say so briefly and ask which wins.
+- **Stay in scope.** Do not add features from the non-goals list or new dependencies without asking.
+- **Build one milestone at a time** (§14). Do not scaffold later milestones early.
+- **Write precise, complete code** — full files or clear diffs, correct imports, no placeholders, no pseudo-code.
+- **Keep the owner's style:** Django developer; prefers concise answers; wants the most correct approach, not just a working one.
+- **Always handle failure paths** (timeouts, dead nodes, partial writes). The project is about fault tolerance — happy-path-only code is wrong.
+- **Metadata on master, blobs on nodes.** Never store file bytes in the database or a node's knowledge of paths.
+- **Add or update tests** with each behaviour change, and keep the demo script working.
+- If something is ambiguous, pick the simplest option consistent with this document and state the assumption in one line.

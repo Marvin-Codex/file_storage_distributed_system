@@ -11,6 +11,10 @@ from django.core.management.base import BaseCommand
 
 logger = logging.getLogger(__name__)
 
+# Internal cluster traffic must never go through a system/environment proxy.
+_session = requests.Session()
+_session.trust_env = False
+
 
 class Command(BaseCommand):
     help = "Send heartbeats to the master until interrupted."
@@ -43,23 +47,24 @@ class Command(BaseCommand):
                 self._send_heartbeat(
                     node_name, node_address, data_dir, capacity, master_url
                 )
-            except requests.RequestException:
-                logger.exception("Heartbeat request failed for node %s", node_name)
+            except requests.RequestException as exc:
+                logger.warning("Heartbeat failed for node %s: %s", node_name, exc)
             except (OSError, ValueError):
                 logger.exception("Heartbeat loop error")
             time.sleep(interval)
 
     def _send_heartbeat(self, name, address, data_dir, capacity, master_url):
         """Send a single heartbeat to the master."""
-        used_bytes = self._used_bytes(data_dir)
         payload = {
             "name": name,
             "address": address,
             "capacity_bytes": capacity,
-            "used_bytes": used_bytes,
+            "used_bytes": self._used_bytes(data_dir),
         }
-        token = signing.dumps({"role": "node", "name": name}, key=settings.CLUSTER_SECRET)
-        response = requests.post(
+        token = signing.dumps(
+            {"role": "node", "name": name}, key=settings.CLUSTER_SECRET
+        )
+        response = _session.post(
             f"{master_url}/internal/heartbeat/",
             json=payload,
             headers={"Authorization": f"Bearer {token}"},
