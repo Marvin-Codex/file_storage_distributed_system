@@ -10,7 +10,7 @@ LANVault is a **distributed file storage system for a local network** (e.g. a un
 
 It is a **university Distributed Systems course project**. It must clearly demonstrate real distributed-systems concepts, not just a CRUD app with folders.
 
-**Team:** SSERUNJOJI MARVIN (23/2/370/W/203), MUKIIBI JUMAH (23/2/370/W/537), SHARAFUDIN LUTALO (23/2/370/W/592) — Ndejje University.
+**Team:** SSERUNJOJI MARVIN (23/2/370/W/203), MUKIIBI JUMAH (23/2/370/W/537) — Ndejje University.
 
 ### Concepts the project must demonstrate
 

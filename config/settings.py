@@ -2,7 +2,10 @@ import os
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from dotenv import load_dotenv
+
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 
 ROLE = os.environ.get("ROLE", "master")
 HA_ENABLED = os.environ.get("HA_ENABLED", "False").lower() == "true"
@@ -94,6 +97,7 @@ HEARTBEAT_INTERVAL_SECONDS = int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", "5
 NODE_DEAD_AFTER_SECONDS = int(os.environ.get("NODE_DEAD_AFTER_SECONDS", "15"))
 MONITOR_INTERVAL_SECONDS = int(os.environ.get("MONITOR_INTERVAL_SECONDS", "5"))
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", "104857600"))
+DATA_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_BYTES
 
 NODE_NAME = os.environ.get("NODE_NAME", "")
 NODE_ADDRESS = os.environ.get("NODE_ADDRESS", "")

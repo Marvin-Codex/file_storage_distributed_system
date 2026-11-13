@@ -10,6 +10,10 @@ from django.core import signing
 logger = logging.getLogger(__name__)
 NODE_REQUEST_TIMEOUT = (5, 30)
 
+# Allow internal cluster traffic to use configured system/environment proxies.
+_session = requests.Session()
+_session.trust_env = False
+
 
 class NodeClientError(Exception):
     """Base exception for node client errors."""
@@ -32,7 +36,7 @@ def put_blob(node, blob_id: uuid.UUID, data: bytes) -> tuple[int, str]:
     url = f"{node.address.rstrip('/')}/store/{blob_id}/"
     token = _master_token()
     try:
-        response = requests.put(
+        response = _session.put(
             url,
             data=data,
             headers={
@@ -64,7 +68,7 @@ def get_blob(node, blob_id: uuid.UUID) -> bytes | None:
     url = f"{node.address.rstrip('/')}/store/{blob_id}/"
     token = _master_token()
     try:
-        response = requests.get(
+        response = _session.get(
             url,
             headers={"Authorization": f"Bearer {token}"},
             timeout=NODE_REQUEST_TIMEOUT,
@@ -86,7 +90,7 @@ def delete_blob(node, blob_id: uuid.UUID) -> None:
     url = f"{node.address.rstrip('/')}/store/{blob_id}/"
     token = _master_token()
     try:
-        response = requests.delete(
+        response = _session.delete(
             url,
             headers={"Authorization": f"Bearer {token}"},
             timeout=NODE_REQUEST_TIMEOUT,

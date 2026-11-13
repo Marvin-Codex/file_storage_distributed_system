@@ -173,8 +173,12 @@ def upload_file(user, path: str, file_obj) -> dict:
                 "Replicated to %s: size=%s sha256=%s",
                 node.name, written_size, written_sha256,
             )
-        except NodeUnavailableError:
-            logger.warning("Replication to %s failed, trying next node", node.name)
+        except NodeUnavailableError as exc:
+            logger.warning(
+                "Replication to %s failed, trying next node: %s",
+                node.name,
+                exc,
+            )
 
     if len(successful_nodes) < settings.REPLICATION_FACTOR:
         # Not enough replicas � delete partial blobs (�8.1 step 5)
