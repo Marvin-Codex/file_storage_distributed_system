@@ -2,10 +2,12 @@
 
 import json
 import logging
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.core import signing
 from django.core.paginator import EmptyPage, Paginator
+from django.db import transaction
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
@@ -13,9 +15,10 @@ from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.permissions import IsAuthenticated
 
-from ..models import StorageNode
+from ..models import EnrollmentToken, StorageNode
 from ..services.replication import (
     AllReplicasUnavailableError,
+    DeleteError,
     DownloadError,
     FileNotFoundError,
     IntegrityFailedError,
@@ -25,10 +28,16 @@ from ..services.replication import (
     TooLargeError,
     UploadError,
     check_read_permission,
+    delete_file,
     download_file,
     upload_file,
     validate_path,
     validate_prefix,
+)
+from ..services.tokens import (
+    hash_enrollment_token,
+    hash_node_credential,
+    make_node_credential,
 )
 from .permissions import IsDepartmentMember, permission_error
 
@@ -52,9 +61,8 @@ class HeartbeatView(View):
         try:
             payload = signing.loads(token, key=settings.CLUSTER_SECRET, max_age=60)
         except (signing.SignatureExpired, signing.BadSignature):
-            logger.warning("Invalid heartbeat token signature")
-            return HttpResponse(status=401)
-        if payload.get("role") != "node":
+            payload = None
+        if payload is not None and payload.get("role") != "node":
             logger.warning("Heartbeat token has wrong role: %s", payload.get("role"))
             return HttpResponse(status=401)
 
@@ -71,7 +79,46 @@ class HeartbeatView(View):
 
         if not name or not address:
             return HttpResponseBadRequest("missing name or address")
+        if payload is None or payload.get("name") != name:
+            node = StorageNode.objects.filter(
+                name=name,
+                credential_hash=hash_node_credential(token),
+                credential_revoked_at__isnull=True,
+            ).first()
+            if node is None:
+                logger.warning("Invalid heartbeat credentials for node %s", name)
+                return HttpResponse(status=401)
 
+        if not isinstance(name, str) or len(name) > 64:
+            return HttpResponseBadRequest("invalid node name")
+        parsed_address = urlsplit(address) if isinstance(address, str) else None
+        if (
+            parsed_address is None
+            or parsed_address.scheme not in {"http", "https"}
+            or not parsed_address.netloc
+            or parsed_address.path not in {"", "/"}
+            or parsed_address.query
+            or parsed_address.fragment
+        ):
+            return HttpResponseBadRequest("invalid node address")
+
+        if (
+            isinstance(capacity_bytes, bool)
+            or isinstance(used_bytes, bool)
+            or not isinstance(capacity_bytes, int)
+            or not isinstance(used_bytes, int)
+            or capacity_bytes < 0
+            or used_bytes < 0
+            or used_bytes > capacity_bytes
+        ):
+            return HttpResponseBadRequest("invalid node capacity")
+
+        existing_node = StorageNode.objects.filter(name=name).first()
+        needs_reconciliation = (
+            existing_node is None
+            or not existing_node.is_alive
+            or existing_node.reconciliation_required
+        )
         # update_or_create — never read-modify-write in Python (§12)
         StorageNode.objects.update_or_create(
             name=name,
@@ -81,10 +128,86 @@ class HeartbeatView(View):
                 "is_alive": True,
                 "capacity_bytes": capacity_bytes,
                 "used_bytes": used_bytes,
+                "reconciliation_required": needs_reconciliation,
             },
         )
         logger.debug("Heartbeat from %s (%s)", name, address)
         return HttpResponse(status=200)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class EnrollmentView(View):
+    """POST /internal/enroll/ — exchange a one-time token for node credentials."""
+
+    def post(self, request):
+        try:
+            data = json.loads(request.body)
+        except (json.JSONDecodeError, ValueError):
+            return HttpResponseBadRequest("invalid json")
+
+        token = data.get("token")
+        name = data.get("name")
+        address = data.get("address")
+        capacity_bytes = data.get("capacity_bytes")
+        if not isinstance(token, str) or not token or not name or not address:
+            return HttpResponseBadRequest("missing enrollment fields")
+        if (
+            not isinstance(name, str)
+            or not name
+            or len(name) > 64
+            or not isinstance(capacity_bytes, int)
+            or isinstance(capacity_bytes, bool)
+            or capacity_bytes <= 0
+        ):
+            return HttpResponseBadRequest("invalid node capacity")
+
+        parsed_address = urlsplit(address) if isinstance(address, str) else None
+        if (
+            parsed_address is None
+            or parsed_address.scheme not in {"http", "https"}
+            or not parsed_address.netloc
+            or parsed_address.path not in {"", "/"}
+            or parsed_address.query
+            or parsed_address.fragment
+        ):
+            return HttpResponseBadRequest("invalid node address")
+
+        with transaction.atomic():
+            enrollment = (
+                EnrollmentToken.objects.select_for_update()
+                .filter(token_hash=hash_enrollment_token(token))
+                .first()
+            )
+            if enrollment is None or not enrollment.is_usable:
+                return HttpResponse(status=401)
+            if (
+                StorageNode.objects.filter(name=name).exists()
+                or StorageNode.objects.filter(address=address.rstrip("/")).exists()
+            ):
+                return HttpResponse(status=409)
+
+            credential = make_node_credential()
+            now = timezone.now()
+            StorageNode.objects.create(
+                name=name,
+                address=address.rstrip("/"),
+                capacity_bytes=capacity_bytes,
+                credential_hash=hash_node_credential(credential),
+                credential_issued_at=now,
+            )
+            enrollment.used_at = now
+            enrollment.save(update_fields=["used_at"])
+
+        return JsonResponse(
+            {
+                "name": name,
+                "credential": credential,
+                "heartbeat_interval_seconds": settings.HEARTBEAT_INTERVAL_SECONDS,
+            },
+            status=201,
+        )
+
+
 @method_decorator(csrf_exempt, name="dispatch")
 class FileUploadView(View):
     """POST /api/files/upload/
@@ -190,11 +313,44 @@ class FileDownloadView(View):
                 status=500,
             )
 
-        response = HttpResponse(data, content_type="application/octet-stream")
+        from django.http import FileResponse
+
+        response = FileResponse(data, content_type="application/octet-stream")
         response["X-File-Version"] = str(version.number)
         response["X-File-SHA256"] = version.sha256
         response["X-Served-By"] = node_name
         return response
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class FileDeleteView(View):
+    """DELETE /api/files/delete/?path=..."""
+
+    def delete(self, request):
+        path = request.GET.get("path", "")
+        if not path:
+            return JsonResponse(
+                {"error": "invalid_path", "detail": "path is required"},
+                status=400,
+            )
+        error = permission_error(request, self, (IsDepartmentMember,))
+        if error:
+            return error
+
+        try:
+            result = delete_file(request.user, path)
+        except InvalidPathError as exc:
+            return JsonResponse({"error": exc.code, "detail": exc.detail}, status=400)
+        except PermissionDeniedError as exc:
+            return JsonResponse({"error": exc.code, "detail": exc.detail}, status=403)
+        except FileNotFoundError as exc:
+            return JsonResponse({"error": exc.code, "detail": exc.detail}, status=404)
+        except DeleteError as exc:
+            return JsonResponse({"error": exc.code, "detail": exc.detail}, status=503)
+        except UploadError as exc:
+            return JsonResponse({"error": exc.code, "detail": exc.detail}, status=400)
+
+        return JsonResponse(result, status=200)
 
 @method_decorator(csrf_exempt, name="dispatch")
 class FileListView(View):

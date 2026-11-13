@@ -1,17 +1,16 @@
 import os
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
-from dotenv import load_dotenv
 
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-load_dotenv(BASE_DIR / ".env")
-
-
 ROLE = os.environ.get("ROLE", "master")
+if ROLE not in {"master", "node", "controller"}:
+    raise RuntimeError("ROLE must be one of: master, node, controller")
+
 HA_ENABLED = os.environ.get("HA_ENABLED", "False").lower() == "true"
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me")
@@ -99,6 +98,9 @@ CLUSTER_SECRET = os.environ.get("CLUSTER_SECRET", "dev-cluster-secret")
 REPLICATION_FACTOR = int(os.environ.get("REPLICATION_FACTOR", "2"))
 HEARTBEAT_INTERVAL_SECONDS = int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", "5"))
 NODE_DEAD_AFTER_SECONDS = int(os.environ.get("NODE_DEAD_AFTER_SECONDS", "15"))
+REPLICA_VERIFY_INTERVAL_SECONDS = int(
+    os.environ.get("REPLICA_VERIFY_INTERVAL_SECONDS", "300")
+)
 MONITOR_INTERVAL_SECONDS = int(os.environ.get("MONITOR_INTERVAL_SECONDS", "5"))
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", "104857600"))
 DATA_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_BYTES

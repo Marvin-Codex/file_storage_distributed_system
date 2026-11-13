@@ -26,6 +26,7 @@ class Command(BaseCommand):
         interval = settings.HEARTBEAT_INTERVAL_SECONDS
         data_dir = settings.NODE_DATA_DIR
         capacity = settings.NODE_CAPACITY_BYTES
+        credential = os.environ.get("NODE_CREDENTIAL", "")
 
         if not node_name:
             self.stderr.write("NODE_NAME is required")
@@ -45,7 +46,7 @@ class Command(BaseCommand):
         while True:
             try:
                 self._send_heartbeat(
-                    node_name, node_address, data_dir, capacity, master_url
+                    node_name, node_address, data_dir, capacity, master_url, credential
                 )
             except requests.RequestException as exc:
                 logger.warning("Heartbeat failed for node %s: %s", node_name, exc)
@@ -53,7 +54,9 @@ class Command(BaseCommand):
                 logger.exception("Heartbeat loop error")
             time.sleep(interval)
 
-    def _send_heartbeat(self, name, address, data_dir, capacity, master_url):
+    def _send_heartbeat(
+        self, name, address, data_dir, capacity, master_url, credential=""
+    ):
         """Send a single heartbeat to the master."""
         payload = {
             "name": name,
@@ -61,7 +64,7 @@ class Command(BaseCommand):
             "capacity_bytes": capacity,
             "used_bytes": self._used_bytes(data_dir),
         }
-        token = signing.dumps(
+        token = credential or signing.dumps(
             {"role": "node", "name": name}, key=settings.CLUSTER_SECRET
         )
         response = _session.post(

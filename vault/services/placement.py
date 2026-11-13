@@ -1,12 +1,21 @@
 """Node placement — choose k alive nodes with the most free space."""
 
 from django.conf import settings
+
 from ..models import StorageNode
 
 
 class NotEnoughNodesError(Exception):
     """Raised when fewer than REPLICATION_FACTOR alive nodes are available."""
-    pass
+
+
+def eligible_nodes(min_free_bytes: int = 0) -> list[StorageNode]:
+    """Return all alive nodes with enough free space, ordered by free space."""
+    nodes = list(
+        StorageNode.objects.filter(is_alive=True)
+        .order_by("-capacity_bytes", "name")
+    )
+    return [node for node in nodes if node.free_bytes >= min_free_bytes]
 
 
 def choose_nodes(k: int | None = None, min_free_bytes: int = 0) -> list[StorageNode]:
@@ -25,14 +34,7 @@ def choose_nodes(k: int | None = None, min_free_bytes: int = 0) -> list[StorageN
     if k is None:
         k = settings.REPLICATION_FACTOR
 
-    nodes = list(
-        StorageNode.objects.filter(is_alive=True)
-        .exclude(capacity_bytes__lt=min_free_bytes)
-        .order_by("-capacity_bytes", "name")
-    )
-
-    # Filter by actual free bytes (capacity - used)
-    qualifying = [n for n in nodes if n.free_bytes >= min_free_bytes]
+    qualifying = eligible_nodes(min_free_bytes)
 
     if len(qualifying) < k:
         raise NotEnoughNodesError(

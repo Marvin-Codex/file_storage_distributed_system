@@ -1,7 +1,9 @@
 """Master-to-node RPC client."""
 
 import logging
+import tempfile
 import uuid
+from typing import BinaryIO
 
 import requests
 from django.conf import settings
@@ -31,7 +33,7 @@ def _master_token() -> str:
     )
 
 
-def put_blob(node, blob_id: uuid.UUID, data: bytes) -> tuple[int, str]:
+def put_blob(node, blob_id: uuid.UUID, data: BinaryIO | bytes) -> tuple[int, str]:
     """PUT a blob to a storage node."""
     url = f"{node.address.rstrip('/')}/store/{blob_id}/"
     token = _master_token()
@@ -63,8 +65,8 @@ def put_blob(node, blob_id: uuid.UUID, data: bytes) -> tuple[int, str]:
         ) from exc
 
 
-def get_blob(node, blob_id: uuid.UUID) -> bytes | None:
-    """GET a blob from a storage node, returning None when it is missing."""
+def get_blob(node, blob_id: uuid.UUID) -> BinaryIO | None:
+    """GET a blob into a temporary stream, returning None when it is missing."""
     url = f"{node.address.rstrip('/')}/store/{blob_id}/"
     token = _master_token()
     try:
@@ -72,6 +74,7 @@ def get_blob(node, blob_id: uuid.UUID) -> bytes | None:
             url,
             headers={"Authorization": f"Bearer {token}"},
             timeout=NODE_REQUEST_TIMEOUT,
+            stream=True,
         )
     except requests.RequestException as exc:
         logger.exception("GET from node %s failed", node.name)
@@ -82,7 +85,17 @@ def get_blob(node, blob_id: uuid.UUID) -> bytes | None:
     if response.status_code != 200:
         logger.warning("GET from node %s returned %s", node.name, response.status_code)
         raise NodeUnavailableError(f"Node {node.name} returned {response.status_code}")
-    return response.content
+    temporary_file = tempfile.TemporaryFile(mode="w+b")  # noqa: SIM115
+    try:
+        for chunk in response.iter_content(chunk_size=65536):
+            if chunk:
+                temporary_file.write(chunk)
+        temporary_file.seek(0)
+        return temporary_file
+    except requests.RequestException as exc:
+        temporary_file.close()
+        logger.exception("GET body from node %s failed", node.name)
+        raise NodeUnavailableError(f"Node {node.name} transfer failed: {exc}") from exc
 
 
 def delete_blob(node, blob_id: uuid.UUID) -> None:
@@ -96,8 +109,39 @@ def delete_blob(node, blob_id: uuid.UUID) -> None:
             timeout=NODE_REQUEST_TIMEOUT,
         )
     except requests.RequestException as exc:
-        logger.warning("DELETE from node %s failed (ignored): %s", node.name, exc)
-        return
+        logger.warning("DELETE from node %s failed: %s", node.name, exc)
+        raise NodeUnavailableError(f"Node {node.name} unreachable: {exc}") from exc
 
     if response.status_code not in (200, 204):
         logger.warning("DELETE from node %s returned %s", node.name, response.status_code)
+        raise NodeUnavailableError(f"Node {node.name} returned {response.status_code}")
+
+
+def list_blob_ids(node) -> set[uuid.UUID]:
+    """Return opaque blob IDs currently present on a node."""
+    url = f"{node.address.rstrip('/')}/inventory/"
+    token = _master_token()
+    try:
+        response = _session.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=NODE_REQUEST_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        logger.warning("INVENTORY from node %s failed: %s", node.name, exc)
+        raise NodeUnavailableError(f"Node {node.name} unreachable: {exc}") from exc
+
+    if response.status_code != 200:
+        logger.warning(
+            "INVENTORY from node %s returned %s",
+            node.name,
+            response.status_code,
+        )
+        raise NodeUnavailableError(f"Node {node.name} returned {response.status_code}")
+    try:
+        blob_ids = response.json()["blobs"]
+        return {uuid.UUID(blob_id) for blob_id in blob_ids}
+    except (ValueError, KeyError, TypeError) as exc:
+        raise NodeUnavailableError(
+            f"Node {node.name} returned an invalid inventory"
+        ) from exc

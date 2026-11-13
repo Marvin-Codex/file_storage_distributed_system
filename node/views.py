@@ -1,16 +1,16 @@
 """Storage node views: PUT/GET/DELETE /store/<uuid>, GET /health."""
 
-import uuid
 import json
+import uuid
 
-from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest
-from django.views import View
-from django.views.decorators.csrf import csrf_exempt
-from django.utils.decorators import method_decorator
 from django.conf import settings
 from django.core import signing
+from django.http import FileResponse, HttpRequest, HttpResponse
+from django.utils.decorators import method_decorator
+from django.views import View
+from django.views.decorators.csrf import csrf_exempt
 
-from .storage import write_blob, read_blob, delete_blob, free_space
+from .storage import delete_blob, free_space, list_blob_ids, open_blob, write_blob
 
 
 def _authenticate(request: HttpRequest) -> bool:
@@ -39,18 +39,17 @@ class StoreView(View):
     def put(self, request: HttpRequest, blob_id: uuid.UUID) -> HttpResponse:
         if not _authenticate(request):
             return HttpResponse(status=401)
-        data = request.body
-        size, sha256 = write_blob(blob_id, data)
+        size, sha256 = write_blob(blob_id, request)
         body = json.dumps({"size": size, "sha256": sha256})
         return HttpResponse(body, status=201, content_type="application/json")
 
     def get(self, request: HttpRequest, blob_id: uuid.UUID) -> HttpResponse:
         if not _authenticate(request):
             return HttpResponse(status=401)
-        data = read_blob(blob_id)
-        if data is None:
+        blob = open_blob(blob_id)
+        if blob is None:
             return HttpResponse(status=404)
-        return HttpResponse(data, content_type="application/octet-stream")
+        return FileResponse(blob, content_type="application/octet-stream")
 
     def delete(self, request: HttpRequest, blob_id: uuid.UUID) -> HttpResponse:
         if not _authenticate(request):
@@ -64,4 +63,14 @@ class HealthView(View):
 
     def get(self, request: HttpRequest) -> HttpResponse:
         body = json.dumps({"free_bytes": free_space()})
+        return HttpResponse(body, status=200, content_type="application/json")
+
+
+class InventoryView(View):
+    """GET /inventory/ — return opaque blob IDs for master reconciliation."""
+
+    def get(self, request: HttpRequest) -> HttpResponse:
+        if not _authenticate(request):
+            return HttpResponse(status=401)
+        body = json.dumps({"blobs": sorted(str(blob_id) for blob_id in list_blob_ids())})
         return HttpResponse(body, status=200, content_type="application/json")

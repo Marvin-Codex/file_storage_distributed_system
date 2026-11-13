@@ -1,4 +1,5 @@
 import uuid
+
 from django.conf import settings
 from django.contrib.auth.models import Group
 from django.db import models
@@ -12,6 +13,11 @@ class StorageNode(models.Model):
     is_alive = models.BooleanField(default=False)
     capacity_bytes = models.BigIntegerField(default=0)
     used_bytes = models.BigIntegerField(default=0)
+    credential_hash = models.CharField(max_length=64, null=True, blank=True, unique=True)
+    credential_issued_at = models.DateTimeField(null=True, blank=True)
+    credential_revoked_at = models.DateTimeField(null=True, blank=True)
+    reconciliation_required = models.BooleanField(default=True)
+    last_reconciled_at = models.DateTimeField(null=True, blank=True)
 
     @property
     def free_bytes(self):
@@ -19,6 +25,23 @@ class StorageNode(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class EnrollmentToken(models.Model):
+    token_hash = models.CharField(max_length=64, unique=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(default=timezone.now)
+
+    @property
+    def is_usable(self):
+        return self.used_at is None and self.expires_at > timezone.now()
 
 
 class FileEntry(models.Model):
@@ -41,7 +64,7 @@ class FileVersion(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
-        unique_together = [("entry", "number")]
+        unique_together = (("entry", "number"),)
 
 
 class Replica(models.Model):
@@ -50,4 +73,4 @@ class Replica(models.Model):
     verified_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        unique_together = [("version", "node")]
+        unique_together = (("version", "node"),)

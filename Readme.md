@@ -158,14 +158,27 @@ lanvault/
 | `NODE_ADDRESS` | node | `http://192.168.1.21:9001` | URL the master uses to reach this node |
 | `NODE_DATA_DIR` | node | `/var/lanvault/data` | Blob directory |
 | `NODE_CAPACITY_BYTES` | node | `107374182400` | Reported in heartbeats |
+| `NODE_CREDENTIAL` | node | — | Credential issued during automatic enrollment |
 | `MASTER_URL` | node | `http://192.168.1.10:8000` | Where to send heartbeats |
 | `REPLICATION_FACTOR` | master | `2` | Default copies per version |
 | `HEARTBEAT_INTERVAL_SECONDS` | node | `5` | Heartbeat period |
 | `NODE_DEAD_AFTER_SECONDS` | master | `15` | Silence before a node is marked dead |
+| `REPLICA_VERIFY_INTERVAL_SECONDS` | master | `300` | Time before a replica is re-verified by the monitor |
 | `MONITOR_INTERVAL_SECONDS` | master | `5` | Monitor loop period |
 | `MAX_UPLOAD_BYTES` | master | `104857600` | Reject larger uploads |
 
 Never hard-code these. Read them in `settings.py` and fail fast if a required one is missing for the active `ROLE`.
+
+To enroll a new node, create a one-time token on the master and exchange it from
+the node machine:
+
+```powershell
+python manage.py create_enrollment_token
+python manage.py join_cluster --master http://MASTER-IP:8000 --token TOKEN --name NODE-B --address http://NODE-IP:9002 --capacity-bytes 107374182400
+```
+
+Set the returned `NODE_CREDENTIAL` before starting `run_heartbeat`. Enrollment
+tokens are stored hashed, expire automatically, and cannot be reused.
 
 The `.env` file is loaded from the repository root. Restart long-running Django
 commands such as `run_heartbeat` after changing it; already-exported shell
@@ -267,6 +280,7 @@ admin is not required for normal user or department administration.
 |---|---|---|
 | `POST` | `/api/files/upload/` | Multipart: `path`, `file`. Creates entry (if new) and version N+1. |
 | `GET` | `/api/files/download/?path=/Computing/notes.pdf` | Streams the latest version. Optional `&version=N`. |
+| `DELETE` | `/api/files/delete/?path=/Computing/notes.pdf` | Deletes all confirmed replicas and metadata. |
 | `GET` | `/api/files/?prefix=/Computing/` | Lists entries the user may see. |
 | `GET` | `/api/files/versions/?path=...` | Lists versions of a path. |
 | `GET` | `/api/cluster/status/` | Nodes, health, free space (staff only). |

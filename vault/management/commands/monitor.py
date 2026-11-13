@@ -9,6 +9,7 @@ from django.db import connection
 from django.utils import timezone
 
 from vault.models import StorageNode
+from vault.services.reconciliation import reconcile_required_nodes
 from vault.services.replication import trigger_self_healing
 
 logger = logging.getLogger(__name__)
@@ -49,10 +50,11 @@ def detect_failures(now=None) -> list[str]:
 
 
 def run_cycle() -> dict:
-    """Run failure detection followed by one idempotent repair pass."""
+    """Run failure detection, reconciliation, and one idempotent repair pass."""
     changed = detect_failures()
+    reconciliation = reconcile_required_nodes()
     repair_summary = trigger_self_healing()
-    return {"changed_nodes": changed, **repair_summary}
+    return {"changed_nodes": changed, **reconciliation, **repair_summary}
 
 
 class Command(BaseCommand):
@@ -81,6 +83,8 @@ class Command(BaseCommand):
                 summary = run_cycle()
                 self.stdout.write(
                     f"Monitor cycle: changed={len(summary['changed_nodes'])}, "
+                    f"reconciled={summary['reconciled']}, "
+                    f"reconcile_failed={summary['failed']}, "
                     f"tried={summary['tried']}, healed={summary['healed']}, "
                     f"skipped={summary['skipped']}"
                 )
