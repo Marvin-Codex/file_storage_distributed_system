@@ -2,6 +2,7 @@
 
 import logging
 import time
+import os
 
 import requests
 from django.conf import settings
@@ -46,6 +47,7 @@ class Command(BaseCommand):
                     node_name, node_address, data_dir, capacity, master_url
                 )
             except requests.RequestException as exc:
+                self.stderr.write(f"Heartbeat failed for {node_name}: {exc}")
                 logger.warning("Heartbeat failed for node %s: %s", node_name, exc)
             except (OSError, ValueError):
                 logger.exception("Heartbeat loop error")

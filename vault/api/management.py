@@ -203,7 +203,7 @@ def _node_commands(
         '$env:CLUSTER_SECRET="<same value as the master>";'
     )
     return {
-        "server": f"{common} python manage.py runserver {node.address.rsplit(':', 1)[-1]}",
+        "server": f"{common} python manage.py runserver 0.0.0.0:{node.address.rsplit(':', 1)[-1]}",
         "heartbeat": f"{common} python manage.py run_heartbeat",
     }
 
