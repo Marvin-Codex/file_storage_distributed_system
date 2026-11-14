@@ -15,7 +15,7 @@ from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.permissions import IsAuthenticated
 
-from ..models import EnrollmentToken, StorageNode
+from ..models import StorageNode
 from ..services.replication import (
     AllReplicasUnavailableError,
     DeleteError,
@@ -33,11 +33,6 @@ from ..services.replication import (
     upload_file,
     validate_path,
     validate_prefix,
-)
-from ..services.tokens import (
-    hash_enrollment_token,
-    hash_node_credential,
-    make_node_credential,
 )
 from .permissions import IsDepartmentMember, permission_error
 
@@ -62,8 +57,8 @@ class HeartbeatView(View):
             payload = signing.loads(token, key=settings.CLUSTER_SECRET, max_age=60)
         except (signing.SignatureExpired, signing.BadSignature):
             payload = None
-        if payload is not None and payload.get("role") != "node":
-            logger.warning("Heartbeat token has wrong role: %s", payload.get("role"))
+        if payload is None or payload.get("role") != "node":
+            logger.warning("Heartbeat token is invalid or has the wrong role")
             return HttpResponse(status=401)
 
         # Parse body
@@ -79,15 +74,9 @@ class HeartbeatView(View):
 
         if not name or not address:
             return HttpResponseBadRequest("missing name or address")
-        if payload is None or payload.get("name") != name:
-            node = StorageNode.objects.filter(
-                name=name,
-                credential_hash=hash_node_credential(token),
-                credential_revoked_at__isnull=True,
-            ).first()
-            if node is None:
-                logger.warning("Invalid heartbeat credentials for node %s", name)
-                return HttpResponse(status=401)
+        if payload.get("name") != name:
+            logger.warning("Heartbeat token identity does not match node %s", name)
+            return HttpResponse(status=401)
 
         if not isinstance(name, str) or len(name) > 64:
             return HttpResponseBadRequest("invalid node name")
@@ -133,79 +122,6 @@ class HeartbeatView(View):
         )
         logger.debug("Heartbeat from %s (%s)", name, address)
         return HttpResponse(status=200)
-
-
-@method_decorator(csrf_exempt, name="dispatch")
-class EnrollmentView(View):
-    """POST /internal/enroll/ — exchange a one-time token for node credentials."""
-
-    def post(self, request):
-        try:
-            data = json.loads(request.body)
-        except (json.JSONDecodeError, ValueError):
-            return HttpResponseBadRequest("invalid json")
-
-        token = data.get("token")
-        name = data.get("name")
-        address = data.get("address")
-        capacity_bytes = data.get("capacity_bytes")
-        if not isinstance(token, str) or not token or not name or not address:
-            return HttpResponseBadRequest("missing enrollment fields")
-        if (
-            not isinstance(name, str)
-            or not name
-            or len(name) > 64
-            or not isinstance(capacity_bytes, int)
-            or isinstance(capacity_bytes, bool)
-            or capacity_bytes <= 0
-        ):
-            return HttpResponseBadRequest("invalid node capacity")
-
-        parsed_address = urlsplit(address) if isinstance(address, str) else None
-        if (
-            parsed_address is None
-            or parsed_address.scheme not in {"http", "https"}
-            or not parsed_address.netloc
-            or parsed_address.path not in {"", "/"}
-            or parsed_address.query
-            or parsed_address.fragment
-        ):
-            return HttpResponseBadRequest("invalid node address")
-
-        with transaction.atomic():
-            enrollment = (
-                EnrollmentToken.objects.select_for_update()
-                .filter(token_hash=hash_enrollment_token(token))
-                .first()
-            )
-            if enrollment is None or not enrollment.is_usable:
-                return HttpResponse(status=401)
-            if (
-                StorageNode.objects.filter(name=name).exists()
-                or StorageNode.objects.filter(address=address.rstrip("/")).exists()
-            ):
-                return HttpResponse(status=409)
-
-            credential = make_node_credential()
-            now = timezone.now()
-            StorageNode.objects.create(
-                name=name,
-                address=address.rstrip("/"),
-                capacity_bytes=capacity_bytes,
-                credential_hash=hash_node_credential(credential),
-                credential_issued_at=now,
-            )
-            enrollment.used_at = now
-            enrollment.save(update_fields=["used_at"])
-
-        return JsonResponse(
-            {
-                "name": name,
-                "credential": credential,
-                "heartbeat_interval_seconds": settings.HEARTBEAT_INTERVAL_SECONDS,
-            },
-            status=201,
-        )
 
 
 @method_decorator(csrf_exempt, name="dispatch")

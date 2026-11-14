@@ -1,6 +1,5 @@
 """Custom authenticated management UI for users and departments."""
 
-from datetime import timedelta
 from typing import ClassVar
 
 from django import forms
@@ -13,8 +12,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views import View
 
-from ..models import EnrollmentToken, StorageNode
-from ..services.tokens import hash_enrollment_token, make_enrollment_token
+from ..models import StorageNode
 
 User = get_user_model()
 
@@ -210,17 +208,6 @@ def _node_commands(
     }
 
 
-class EnrollmentTokenForm(forms.Form):
-    expires_in = forms.IntegerField(
-        min_value=60,
-        max_value=86400,
-        initial=900,
-        label="Token lifetime (seconds)",
-        help_text="Use 900 for 15 minutes. The token can be used once.",
-        widget=forms.NumberInput(attrs={"min": "60", "max": "86400"}),
-    )
-
-
 def _management_context() -> dict:
     return {
         "departments": Group.objects.order_by("name").prefetch_related("user_set"),
@@ -241,51 +228,6 @@ class ManagementView(View):
 
     def get(self, request: HttpRequest) -> HttpResponse:
         return render(request, "vault/management.html", _management_context())
-
-
-class EnrollmentTokenView(ManagementView):
-    def get(self, request: HttpRequest) -> HttpResponse:
-        return render(
-            request,
-            "vault/enrollment_token.html",
-            {"form": EnrollmentTokenForm()},
-        )
-
-    def post(self, request: HttpRequest) -> HttpResponse:
-        form = EnrollmentTokenForm(request.POST)
-        if not form.is_valid():
-            return render(request, "vault/enrollment_token.html", {"form": form})
-
-        token = make_enrollment_token()
-        expires_at = timezone.now() + timedelta(
-            seconds=form.cleaned_data["expires_in"]
-        )
-        EnrollmentToken.objects.create(
-            token_hash=hash_enrollment_token(token),
-            expires_at=expires_at,
-            created_by=request.user,
-        )
-        return render(
-            request,
-            "vault/enrollment_token.html",
-            {
-                "form": EnrollmentTokenForm(),
-                "token": token,
-                "expires_at": expires_at,
-            },
-        )
-
-
-class RevokeNodeCredentialView(ManagementView):
-    def post(self, request: HttpRequest, pk: int) -> HttpResponse:
-        node = get_object_or_404(StorageNode, pk=pk)
-        if node.credential_hash and not node.credential_revoked_at:
-            node.credential_revoked_at = timezone.now()
-            node.save(update_fields=["credential_revoked_at"])
-            messages.success(request, f"Credential revoked for {node.name}.")
-        else:
-            messages.info(request, f"{node.name} has no active credential.")
-        return redirect("vault:management")
 
 
 class NodeCreateView(ManagementView):

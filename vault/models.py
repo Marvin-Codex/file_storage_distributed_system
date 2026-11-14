@@ -13,9 +13,6 @@ class StorageNode(models.Model):
     is_alive = models.BooleanField(default=False)
     capacity_bytes = models.BigIntegerField(default=0)
     used_bytes = models.BigIntegerField(default=0)
-    credential_hash = models.CharField(max_length=64, null=True, blank=True, unique=True)
-    credential_issued_at = models.DateTimeField(null=True, blank=True)
-    credential_revoked_at = models.DateTimeField(null=True, blank=True)
     reconciliation_required = models.BooleanField(default=True)
     last_reconciled_at = models.DateTimeField(null=True, blank=True)
 
@@ -25,23 +22,6 @@ class StorageNode(models.Model):
 
     def __str__(self):
         return self.name
-
-
-class EnrollmentToken(models.Model):
-    token_hash = models.CharField(max_length=64, unique=True)
-    expires_at = models.DateTimeField()
-    used_at = models.DateTimeField(null=True, blank=True)
-    created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-    )
-    created_at = models.DateTimeField(default=timezone.now)
-
-    @property
-    def is_usable(self):
-        return self.used_at is None and self.expires_at > timezone.now()
 
 
 class FileEntry(models.Model):

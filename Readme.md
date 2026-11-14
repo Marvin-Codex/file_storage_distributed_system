@@ -158,7 +158,6 @@ lanvault/
 | `NODE_ADDRESS` | node | `http://192.168.1.21:9001` | URL the master uses to reach this node |
 | `NODE_DATA_DIR` | node | `/var/lanvault/data` | Blob directory |
 | `NODE_CAPACITY_BYTES` | node | `107374182400` | Reported in heartbeats |
-| `NODE_CREDENTIAL` | node | — | Credential issued during automatic enrollment |
 | `MASTER_URL` | node | `http://192.168.1.10:8000` | Where to send heartbeats |
 | `REPLICATION_FACTOR` | master | `2` | Default copies per version |
 | `HEARTBEAT_INTERVAL_SECONDS` | node | `5` | Heartbeat period |
@@ -169,16 +168,9 @@ lanvault/
 
 Never hard-code these. Read them in `settings.py` and fail fast if a required one is missing for the active `ROLE`.
 
-To enroll a new node, create a one-time token on the master and exchange it from
-the node machine:
-
-```powershell
-python manage.py create_enrollment_token
-python manage.py join_cluster --master http://MASTER-IP:8000 --token TOKEN --name NODE-B --address http://NODE-IP:9002 --capacity-bytes 107374182400
-```
-
-Set the returned `NODE_CREDENTIAL` before starting `run_heartbeat`. Enrollment
-tokens are stored hashed, expire automatically, and cannot be reused.
+To onboard a node, add it from the management page, then run the generated
+server and heartbeat commands on the node machine. Both machines must use the
+same `CLUSTER_SECRET`; the node signs each heartbeat with that shared secret.
 
 The `.env` file is loaded from the repository root. Restart long-running Django
 commands such as `run_heartbeat` after changing it; already-exported shell

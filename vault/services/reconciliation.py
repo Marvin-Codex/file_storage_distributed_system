@@ -51,7 +51,7 @@ def reconcile_node(node: StorageNode) -> dict:
 
 
 def reconcile_required_nodes() -> dict:
-    """Reconcile nodes marked after enrollment or reconnect."""
+    """Reconcile nodes marked after registration or reconnect."""
     summary = {"reconciled": 0, "failed": 0, "missing": 0, "untracked": 0}
     for node in StorageNode.objects.filter(
         is_alive=True,

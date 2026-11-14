@@ -7,29 +7,24 @@ from .api.management import (
     DepartmentCreateView,
     DepartmentDeleteView,
     DepartmentUpdateView,
-    EnrollmentTokenView,
     ManagementView,
     NodeCreateView,
-    RevokeNodeCredentialView,
     UserCreateView,
     UserDeleteView,
     UserUpdateView,
 )
 from .api.portal import PortalView
 from .api.profile import PasswordChangeView, ProfileView
-from .api.views import EnrollmentView, HeartbeatView
+from .api.views import HeartbeatView
 
 app_name = "vault"
 
 urlpatterns = [
     path("internal/heartbeat/", HeartbeatView.as_view(), name="heartbeat"),
-    path("internal/enroll/", EnrollmentView.as_view(), name="enroll"),
     path("dashboard/", DashboardView.as_view(), name="dashboard"),
     path("ready/", ReadinessView.as_view(), name="readiness"),
     path("manage/", ManagementView.as_view(), name="management"),
     path("manage/nodes/new/", NodeCreateView.as_view(), name="node_create"),
-    path("manage/nodes/<int:pk>/revoke/", RevokeNodeCredentialView.as_view(), name="node_revoke"),
-    path("manage/enrollment-token/", EnrollmentTokenView.as_view(), name="enrollment_token"),
     path("manage/departments/new/", DepartmentCreateView.as_view(), name="department_create"),
     path("manage/departments/<int:pk>/edit/", DepartmentUpdateView.as_view(), name="department_edit"),
     path("manage/departments/<int:pk>/delete/", DepartmentDeleteView.as_view(), name="department_delete"),

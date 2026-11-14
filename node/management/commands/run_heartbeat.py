@@ -1,7 +1,6 @@
 """Heartbeat sender for storage nodes."""
 
 import logging
-import os
 import time
 
 import requests
@@ -26,8 +25,6 @@ class Command(BaseCommand):
         interval = settings.HEARTBEAT_INTERVAL_SECONDS
         data_dir = settings.NODE_DATA_DIR
         capacity = settings.NODE_CAPACITY_BYTES
-        credential = os.environ.get("NODE_CREDENTIAL", "")
-
         if not node_name:
             self.stderr.write("NODE_NAME is required")
             return
@@ -46,7 +43,7 @@ class Command(BaseCommand):
         while True:
             try:
                 self._send_heartbeat(
-                    node_name, node_address, data_dir, capacity, master_url, credential
+                    node_name, node_address, data_dir, capacity, master_url
                 )
             except requests.RequestException as exc:
                 logger.warning("Heartbeat failed for node %s: %s", node_name, exc)
@@ -55,7 +52,7 @@ class Command(BaseCommand):
             time.sleep(interval)
 
     def _send_heartbeat(
-        self, name, address, data_dir, capacity, master_url, credential=""
+        self, name, address, data_dir, capacity, master_url
     ):
         """Send a single heartbeat to the master."""
         payload = {
@@ -64,7 +61,7 @@ class Command(BaseCommand):
             "capacity_bytes": capacity,
             "used_bytes": self._used_bytes(data_dir),
         }
-        token = credential or signing.dumps(
+        token = signing.dumps(
             {"role": "node", "name": name}, key=settings.CLUSTER_SECRET
         )
         response = _session.post(

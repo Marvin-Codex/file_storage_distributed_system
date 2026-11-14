@@ -1,8 +1,5 @@
 """Signed inter-service tokens for master <-> node communication."""
 
-import hashlib
-import secrets
-
 from django.conf import settings
 from django.core import signing
 
@@ -31,23 +28,3 @@ def make_master_token() -> str:
 def make_node_token(node_name: str) -> str:
     """Create a token for node -> master heartbeats."""
     return sign_token({"role": "node", "name": node_name})
-
-
-def make_enrollment_token() -> str:
-    """Create a random one-time enrollment token."""
-    return secrets.token_urlsafe(32)
-
-
-def hash_enrollment_token(token: str) -> str:
-    """Hash an enrollment token before storing it."""
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def make_node_credential() -> str:
-    """Create a random long-lived credential for one storage node."""
-    return secrets.token_urlsafe(32)
-
-
-def hash_node_credential(credential: str) -> str:
-    """Hash a node credential before storing it."""
-    return hashlib.sha256(credential.encode("utf-8")).hexdigest()

@@ -188,40 +188,13 @@ Do not introduce complicated distributed consensus mechanisms in Master Mode.
 - Missing replicas can be restored.
 - Replica metadata matches actual stored data.
 
-# PHASE 5: AUTOMATIC NODE ONBOARDING
+# PHASE 5: NODE ONBOARDING
 
-Implement automatic onboarding for Master Mode.
+Use the management page to register a node and generate its startup commands.
+The node and master share `CLUSTER_SECRET`; the node signs each heartbeat with
+that secret and the master registers it when the heartbeat is valid.
 
-A new storage node should be able to join without manually editing database records.
-
-Proposed workflow:
-
-1. Administrator generates a secure, expiring enrollment token.
-2. New node starts with the master address and enrollment token.
-3. New node contacts the master.
-4. Master validates the token.
-5. Master registers the node.
-6. Master issues node-specific credentials.
-7. New node begins sending heartbeats.
-8. Master verifies node health.
-9. Node becomes eligible for storage allocation.
-
-Example command:
-
-```bash
-python manage.py join_cluster --master http://MASTER-IP:8000 --token TOKEN --name NODE-B
-```
-
-Security requirements:
-
-- Expiring, single-use enrollment tokens.
-- Node-specific credentials.
-- Authentication on all storage APIs.
-- Credential revocation.
-- Secure communication support through HTTPS.
-- Never expose enrollment tokens in logs.
-
-Keep the onboarding design adaptable to future decentralized peer discovery.
+Storage APIs remain protected by signed master-to-node requests.
 
 # PHASE 6: FAILURE HANDLING AND RECOVERY
 
@@ -292,7 +265,7 @@ Review:
 
 Use streaming for large file transfers where appropriate.
 
-Never expose internal storage paths or node credentials to ordinary users.
+Never expose internal storage paths or the shared cluster secret to ordinary users.
 
 Keep DEBUG disabled in production.
 
@@ -312,7 +285,7 @@ Build automated tests for:
 10. Node failure.
 11. Node recovery.
 12. Interrupted transfers.
-13. Invalid enrollment tokens.
+13. Invalid heartbeat signatures.
 14. Unauthorized API requests.
 15. Large-file integrity.
 
@@ -331,7 +304,7 @@ Future requirements:
 - Every node runs controller and storage services.
 - Every node can accept client requests.
 - Peer discovery.
-- Secure peer enrollment.
+- Secure peer onboarding.
 - Distributed membership.
 - Temporary leader election where required.
 - Consensus-backed cluster metadata.
